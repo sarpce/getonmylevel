@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import common
 import instruction_integration as integration
 import install_gui
+import agents_gui
 
 
 SKILLS = list(common.SKILL_NAMES)
@@ -54,6 +55,62 @@ class InstructionIntegrationTests(unittest.TestCase):
         before = current[0].path.read_bytes()
         self.assertEqual(integration.write_instruction_updates(current), [])
         self.assertEqual(current[0].path.read_bytes(), before)
+
+    def test_new_mode_guidance_is_generated_for_both_clients_and_scopes(self):
+        required = ("any software edit", "small fixes", "multiple-choice popup", "actual answer",
+                    "independent reviewer and tester", "higher-priority")
+        for client in ("codex", "claude"):
+            for scope in ("user", "repo"):
+                with self.subTest(client=client, scope=scope):
+                    block = integration._block(SKILLS[:1], scope, "\n", client)
+                    for phrase in required:
+                        self.assertIn(phrase, block)
+
+    def test_legacy_managed_block_upgrades_and_remains_removable(self):
+        path = self.codex / "AGENTS.md"
+        legacy = integration._legacy_block(SKILLS[:1], "user", "\n")
+        path.write_text("Before\n" + legacy + "\nAfter\n", encoding="utf-8")
+        plan, = integration.plan_instruction_updates("user", None, SKILLS[:1])
+        self.assertEqual(plan.action, "Update")
+        integration.write_instruction_updates([plan])
+        updated = path.read_text(encoding="utf-8")
+        self.assertIn("Simple or Agent-based", updated)
+        self.assertTrue(updated.startswith("Before\n"))
+        self.assertTrue(updated.endswith("\nAfter\n"))
+        removal, = integration.plan_instruction_removals("user", None)
+        integration.write_instruction_removals([removal])
+        self.assertEqual(path.read_text(encoding="utf-8"), "Before\nAfter\n")
+
+    def test_legacy_claude_block_upgrades(self):
+        claude = self.root / "claude"
+        claude.mkdir()
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude)}):
+            path = claude / "CLAUDE.md"
+            path.write_text(integration._legacy_block(SKILLS[:1], "user", "\n", "claude"), encoding="utf-8")
+            plan, = integration.plan_instruction_updates("user", None, SKILLS[:1], "claude")
+            self.assertEqual(plan.action, "Update")
+            integration.write_instruction_updates([plan], "claude")
+            self.assertIn("multiple-choice popup", path.read_text(encoding="utf-8"))
+
+    def test_clipboard_selector_contains_popup_wait_and_software_mode_rules(self):
+        class Clipboard:
+            def __init__(self):
+                self.value = ""
+
+            def clipboard_clear(self):
+                pass
+
+            def clipboard_append(self, value):
+                self.value = value
+
+        gui = agents_gui.AgentConfigurator.__new__(agents_gui.AgentConfigurator)
+        gui.preference = mock.Mock()
+        gui.preference.get.return_value = "Ask"
+        gui.root = Clipboard()
+        with mock.patch.object(agents_gui.messagebox, "showinfo"):
+            gui.copy_selector()
+        for phrase in ("any software edit", "multiple-choice popup", "actual response", "reviewer and tester"):
+            self.assertIn(phrase, gui.root.value)
 
     def test_discovery_skill_adds_instruction_to_existing_block(self):
         path = self.codex / "AGENTS.md"

@@ -82,6 +82,25 @@ def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> 
              *[f"- `{path}`" for path in paths],
              "", location_note.rstrip("\n") if location_note else None,
              (("For each task, review the available skills and relevant skill locations (including `.agents/skills`, `.codex/skills`, and `.skills` where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions." if client == "codex" else f"For each task, review the available skills and relevant skill locations (including `{folder}/skills`, `.skills`, and client-specific locations where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions.") if "getonmylevel-skill-discovery" in names else None),
+             "For every new request involving any software edit, including small fixes, tests, configuration, documentation, or skills, ask the user to choose Simple or Agent-based before editing or delegating unless they explicitly chose a mode for that request. Ask again for each new request. In Agent-based mode, ask separately whether to use an independent reviewer and tester; keep each disabled unless selected. When a multiple-choice popup is available and can deliver the response, use it and wait for the user's actual answer. Never treat a preselected option, timeout, or elapsed time as an answer. If no usable popup exists, ask in chat and leave dependent work pending until the user answers. Respect higher-priority session instructions and explain if they prevent a mode from being used.",
+             "Honor explicit user changes to this preference and higher-priority instructions.", END]
+    return newline.join(line for line in lines if line is not None)
+
+
+def _legacy_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+    """Render the exact previous template so existing managed blocks remain recognized."""
+    folder = ".claude" if client == "claude" else ".agents"
+    if kind == "user":
+        user_root = os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude" if client == "claude" else "~/.agents"
+        paths = [f"{user_root}/skills/{name}/SKILL.md" for name in names]
+        location_note = ""
+    else:
+        paths = [f"{folder}/skills/{name}/SKILL.md" for name in names]
+        location_note = "These paths are relative to the repository root.\n"
+    lines = [BEGIN, "## getonmylevel skills", "",
+             "By default, at the start of each conversation, read the following installed skill instructions and follow them as relevant to the task:",
+             *[f"- `{path}`" for path in paths], "", location_note.rstrip("\n") if location_note else None,
+             (("For each task, review the available skills and relevant skill locations (including `.agents/skills`, `.codex/skills`, and `.skills` where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions." if client == "codex" else f"For each task, review the available skills and relevant skill locations (including `{folder}/skills`, `.skills`, and client-specific locations where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions.") if "getonmylevel-skill-discovery" in names else None),
              "Honor explicit user changes to this preference and higher-priority instructions.", END]
     return newline.join(line for line in lines if line is not None)
 
@@ -111,7 +130,7 @@ def _parse_block(text: str, kind: str, newline: str, client: str = "codex") -> l
             if name not in common.SKILL_NAMES or name in names:
                 raise ValueError(f"Managed skill instruction block has an unknown or duplicate skill: {name!r}.")
             names.append(name)
-    if not names or body != _block(names, kind, newline, client):
+    if not names or body not in (_block(names, kind, newline, client), _legacy_block(names, kind, newline, client)):
         raise ValueError("Managed skill instruction block was edited or is malformed; repair or remove it manually.")
     return names
 

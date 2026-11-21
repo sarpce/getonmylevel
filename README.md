@@ -38,7 +38,7 @@ Already have a skill installed? GUI updates it and keeps the old directory in a 
 
 The installer asks Codex to read selected skills by default when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering` or `$getonmylevel-design`. Your instructions and higher-priority rules still apply.
 
-For an interactive software change, the engineering skill offers **Simple** or **Agent-based** and waits for your choice. Simple means the main agent works directly. Agent-based uses a designer and then an implementer; independent review and testing are separate choices. Delegation and checks still need to be allowed by the active session. Configure the optional roles in the Agents tab before using them.
+Before any software edit, including small fixes, tests, configuration, documentation, and skills, the instructions ask you to choose **Simple** or **Agent-based** for that request. In Agent-based mode, reviewer and tester are separate choices. When a multiple-choice popup is available, it is used and the workflow waits for your answer; otherwise the question remains pending in chat. Higher-priority session instructions still apply. Simple means the main agent works directly. Agent-based uses a designer and then an implementer; configure optional roles in the Agents tab.
 
 The Agents tab can also copy an optional On/Off/Ask session preference block. It does not write that block to a file; merge it into your instructions yourself if wanted. See [session selector](optional/global-session-selector.md) for its scope.
 

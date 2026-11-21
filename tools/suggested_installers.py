@@ -46,6 +46,17 @@ class SuggestedInstallPlan:
         return f"{self.name}\n{self.details}{destination}\nCommands/actions:\n{commands}"
 
 
+@dataclass(frozen=True)
+class SuggestedRemovalPlan:
+    id: str
+    name: str
+    destinations: tuple[tuple[Path, tuple[int, int]], ...]
+
+    @property
+    def confirmation_text(self) -> str:
+        return f"{self.name}\nRemove these skill directories:\n" + "\n".join(f"  {path}" for path, _ in self.destinations)
+
+
 def _run(command: list[str] | tuple[str, ...], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command), shell=False, stdin=subprocess.DEVNULL, capture_output=True,
@@ -130,6 +141,110 @@ def _safe_destination(path: Path) -> None:
         raise FileExistsError(f"Destination already exists; updates are not performed: {path}")
 
 
+def _skill_roots() -> tuple[Path, ...]:
+    codex_home = os.environ.get("CODEX_HOME")
+    roots = (Path.home() / ".agents" / "skills",
+             (Path(codex_home).expanduser() if codex_home else Path.home() / ".codex") / "skills")
+    result = []
+    seen = set()
+    for root in roots:
+        expanded = root.expanduser()
+        normalized = expanded.resolve(strict=False)
+        if normalized not in seen:
+            seen.add(normalized)
+            result.append(expanded)
+    return tuple(result)
+
+
+def _skill_destinations(item_id: str) -> tuple[Path, ...]:
+    name = {"last30days": "last30days", "cli_anything": "cli-anything"}.get(item_id)
+    if name is None:
+        return ()
+    return tuple(root / name for root in _skill_roots() if _is_present(root / name))
+
+
+def _ensure_no_alternate_install(item_id: str, destination: Path) -> None:
+    target = os.path.normcase(os.path.abspath(destination))
+    others = [path for path in _skill_destinations(item_id)
+              if os.path.normcase(os.path.abspath(path)) != target]
+    if others:
+        raise FileExistsError("The skill appeared in another supported location: " + ", ".join(map(str, others)))
+
+
+def suggested_status() -> dict[str, tuple[Path, ...] | str | None]:
+    """Return detected locations for suggested installs; RTK is only detected on PATH."""
+    return {"last30days": _skill_destinations("last30days"),
+            "cli_anything": _skill_destinations("cli_anything"),
+            "rtk": shutil.which("rtk")}
+
+
+def plan_removal(item_id: str) -> tuple[SuggestedRemovalPlan | None, str | None]:
+    if item_id not in ("last30days", "cli_anything"):
+        return None, "Only detected skill directories can be removed here."
+    paths = _skill_destinations(item_id)
+    if not paths:
+        return None, "The skill is no longer installed in the supported locations. Refresh and try again."
+    name = next(item.name for item in SUGGESTED_ITEMS if item.id == item_id)
+    destinations = []
+    try:
+        for path in paths:
+            _safe_removal_destination(path)
+            destinations.append((path, _identity(path)))
+    except (OSError, ValueError) as exc:
+        return None, f"Cannot safely prepare removal: {exc}"
+    return SuggestedRemovalPlan(item_id, name, tuple(destinations)), None
+
+
+def _identity(path: Path) -> tuple[int, int]:
+    info = path.lstat()
+    return info.st_dev, info.st_ino
+
+
+def _safe_removal_destination(path: Path) -> None:
+    root = path.parent
+    _safe_destination_root(root)
+    if common.is_link_or_reparse(path):
+        raise ValueError(f"Refusing linked or reparse-point destination: {path}")
+    if not path.is_dir():
+        raise ValueError(f"Skill destination is not a directory: {path}")
+    if not (path / "SKILL.md").is_file():
+        raise ValueError(f"Destination does not contain SKILL.md: {path}")
+    _reject_linked_tree(path)
+
+
+def _safe_destination_root(root: Path) -> None:
+    expanded = root.expanduser()
+    for candidate in (expanded, *expanded.parents):
+        if common.is_link_or_reparse(candidate):
+            raise ValueError(f"Refusing linked or reparse-point managed path: {candidate}")
+    if root.exists() and not root.is_dir():
+        raise ValueError(f"Skills root is not a directory: {root}")
+
+
+def remove_selected(plans: list[SuggestedRemovalPlan]) -> list[tuple[str, bool, str]]:
+    results = []
+    for plan in plans:
+        removed = []
+        try:
+            for path, identity in plan.destinations:
+                _safe_removal_destination(path)
+                if _identity(path) != identity:
+                    raise FileExistsError(f"Destination changed after confirmation: {path}")
+                # Recheck immediately before deleting the confirmed tree.
+                _safe_removal_destination(path)
+                if _identity(path) != identity:
+                    raise FileExistsError(f"Destination changed before removal: {path}")
+                shutil.rmtree(path)
+                removed.append(str(path))
+            results.append((plan.name, True, "Removed:\n" + "\n".join(removed)))
+        except (OSError, ValueError) as exc:
+            detail = f"Removal stopped: {exc}"
+            if removed:
+                detail += "\nAlready removed: " + ", ".join(removed)
+            results.append((plan.name, False, detail))
+    return results
+
+
 def _reject_linked_tree(root: Path) -> None:
     if common.is_link_or_reparse(root):
         raise ValueError(f"Refusing linked or reparse-point source: {root}")
@@ -152,6 +267,9 @@ def _last30_plan() -> tuple[SuggestedInstallPlan | None, str | None]:
     if not git:
         return None, f"Git is required. Install manually: {LAST30_URL}"
     destination = Path.home() / ".agents" / "skills" / "last30days"
+    existing = _skill_destinations("last30days")
+    if existing:
+        return None, "Already installed at " + ", ".join(map(str, existing))
     try:
         _safe_destination(destination)
     except (OSError, ValueError) as exc:
@@ -169,6 +287,7 @@ def _install_last30(plan: SuggestedInstallPlan) -> tuple[bool, str]:
     destination = plan.destination
     assert destination is not None
     try:
+        _ensure_no_alternate_install("last30days", destination)
         _safe_destination(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="getonmylevel-last30-") as temp:
@@ -185,6 +304,7 @@ def _install_last30(plan: SuggestedInstallPlan) -> tuple[bool, str]:
             try:
                 shutil.copytree(source, stage, symlinks=False)
                 _reject_linked_tree(stage)
+                _ensure_no_alternate_install("last30days", destination)
                 _safe_destination(destination)
                 stage.rename(destination)
             finally:
@@ -206,6 +326,9 @@ def _cli_plan(system: str | None = None) -> tuple[SuggestedInstallPlan | None, s
     if not git:
         return None, f"Git is required. Install manually: {CLI_ANYTHING_URL}"
     destination = _cli_destination()
+    existing = _skill_destinations("cli_anything")
+    if existing:
+        return None, "Already installed at " + ", ".join(map(str, existing))
     try:
         _safe_destination(destination)
     except (OSError, ValueError) as exc:
@@ -235,6 +358,7 @@ def _install_cli(plan: SuggestedInstallPlan) -> tuple[bool, str]:
     assert destination is not None
     git, shell, system = plan.data
     try:
+        _ensure_no_alternate_install("cli_anything", destination)
         _safe_destination(destination)
         with tempfile.TemporaryDirectory(prefix="getonmylevel-cli-anything-") as temp:
             checkout = Path(temp) / "checkout"
@@ -247,6 +371,7 @@ def _install_cli(plan: SuggestedInstallPlan) -> tuple[bool, str]:
                 return False, f"Upstream installer was not found: {script}. Review {CLI_ANYTHING_URL}."
             command = ((shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script))
                        if system == "Windows" else (shell, str(script)))
+            _ensure_no_alternate_install("cli_anything", destination)
             _safe_destination(destination)
             env = dict(os.environ)
             env.update({"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "Never"})

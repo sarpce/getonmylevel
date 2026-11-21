@@ -69,17 +69,22 @@ class Installer:
 
         suggested_box = ttk.LabelFrame(outer, text="Suggested skillsets and tools", padding=8)
         suggested_box.pack(fill="x", pady=(10, 0))
-        ttk.Label(suggested_box, text="Optional user-wide installs. Select any combination; all selected items are reviewed before installation.",
+        ttk.Label(suggested_box, text="Optional user-wide skills and tools. Installed skills can be removed from detected locations; RTK is detected on PATH.",
                   wraplength=700).pack(anchor="w")
         self.suggested_selected = {item.id: tk.BooleanVar(value=False) for item in suggested_installers.SUGGESTED_ITEMS}
         self.suggested_checks = []
+        self.suggested_labels = {}
+        self.suggested_actions = {}
         for item in suggested_installers.SUGGESTED_ITEMS:
-            check = ttk.Checkbutton(suggested_box, text=f"{item.name} — {item.description}",
-                                    variable=self.suggested_selected[item.id])
+            check = ttk.Checkbutton(suggested_box, text=item.name, variable=self.suggested_selected[item.id])
             check.pack(anchor="w")
+            detail = ttk.Label(suggested_box, text=item.description, wraplength=680)
+            detail.pack(anchor="w", padx=(24, 0))
             self.suggested_checks.append(check)
-        self.suggested_button = ttk.Button(suggested_box, text="Install selected suggestions…",
-                                           command=self.install_suggestions)
+            self.suggested_labels[item.id] = (check, detail)
+        self.suggested_refresh_button = ttk.Button(suggested_box, text="Refresh status", command=self.refresh_suggested_status)
+        self.suggested_refresh_button.pack(anchor="e")
+        self.suggested_button = ttk.Button(suggested_box, text="Apply selected changes...", command=self.install_suggestions)
         self.suggested_button.pack(anchor="e", pady=(4, 0))
 
         ttk.Label(outer, text="Preview").pack(anchor="w", pady=(12, 4))
@@ -99,6 +104,7 @@ class Installer:
         self.suggested_queue = queue.Queue()
         self.install_queue = queue.Queue()
         self.install_busy = False
+        self.refresh_suggested_status()
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.context_selection_changed()
 
@@ -120,21 +126,42 @@ class Installer:
         if self.suggested_busy or self.suggested_confirming:
             return
         selected = [item_id for item_id, variable in self.suggested_selected.items() if variable.get()]
-        plans, error = suggested_installers.plan_selected(selected)
-        if error:
-            messagebox.showwarning("Suggested items unavailable", error)
+        if not selected:
+            messagebox.showinfo("No suggestions selected", "Select an item first.")
             return
-        assert plans is not None
-        confirmation = "Install these suggested items for the current user?\n\n"
-        confirmation += "\n\n".join(plan.confirmation_text for plan in plans)
-        confirmation += ("\n\nUpstream default branches are not pinned. Selected installers may download files or execute upstream code with your privileges. "
-                         "Canceling makes no changes.")
+        status = suggested_installers.suggested_status()
+        installs, removals, errors = [], [], []
+        for item_id in selected:
+            if status[item_id]:
+                if item_id == "rtk":
+                    errors.append(f"RTK is detected at {status[item_id]}. Remove it manually using its package manager.")
+                    continue
+                plan, error = suggested_installers.plan_removal(item_id)
+                if error:
+                    errors.append(error)
+                elif plan:
+                    removals.append(plan)
+            else:
+                plans, error = suggested_installers.plan_selected([item_id])
+                if error:
+                    errors.append(error)
+                elif plans:
+                    installs.extend(plans)
+        if errors:
+            messagebox.showwarning("Suggested items unavailable", "\n\n".join(errors))
+            self.refresh_suggested_status()
+            return
+        actions = [plan.confirmation_text for plan in (*installs, *removals)]
+        confirmation = "Review these changes for the current user:\n\n" + "\n\n".join(actions)
+        if installs:
+            confirmation += "\n\nUpstream default branches are not pinned. Selected installers may download files or execute upstream code with your privileges."
+        confirmation += "\n\nCanceling makes no changes."
         self.suggested_confirming = True
         self.suggested_button.configure(state="disabled")
         self.skill_button.configure(state="disabled")
         self.remove_button.configure(state="disabled")
         try:
-            confirmed = messagebox.askyesno("Confirm suggested installations", confirmation)
+            confirmed = messagebox.askyesno("Confirm suggested changes", confirmation)
         except tk.TclError as exc:
             self.suggested_button.configure(state="normal")
             self.skill_button.configure(state="normal")
@@ -148,28 +175,30 @@ class Installer:
             self.skill_button.configure(state="normal")
             self.remove_button.configure(state="normal")
             return
-        self.start_suggested_install(plans)
+        self.start_suggested_install(installs, removals)
 
-    def start_suggested_install(self, plans: list[suggested_installers.SuggestedInstallPlan]) -> None:
+    def start_suggested_install(self, plans: list[suggested_installers.SuggestedInstallPlan], removals=()) -> None:
         self.suggested_busy = True
         self.skill_button.configure(state="disabled")
         self.remove_button.configure(state="disabled")
         self.close_button.configure(state="disabled")
         self.suggested_button.configure(state="disabled")
+        self.suggested_refresh_button.configure(state="disabled")
         for check in self.suggested_checks:
             check.configure(state="disabled")
         self.suggested_status = tk.Toplevel(self.root)
-        self.suggested_status.title("Installing suggested items")
+        self.suggested_status.title("Applying suggested changes")
         self.suggested_status.transient(self.root)
         self.suggested_status.protocol("WM_DELETE_WINDOW", lambda: None)
-        ttk.Label(self.suggested_status, text="Installing selected suggestions. The interface remains available while installers run.",
+        ttk.Label(self.suggested_status, text="Applying selected changes. The interface remains available while operations run.",
                   padding=16, wraplength=420).pack()
 
         def worker() -> None:
             try:
                 result = suggested_installers.install_selected(plans)
+                result.extend(suggested_installers.remove_selected(list(removals)))
             except Exception as exc:
-                result = [("Suggested installations", False, f"Worker failed; partial changes may remain: {exc}")]
+                result = [("Suggested changes", False, f"Worker failed; partial changes may remain: {exc}")]
             self.suggested_queue.put(result)
 
         try:
@@ -177,7 +206,7 @@ class Installer:
         except (RuntimeError, OSError) as exc:
             self.finish_suggested_install()
             self.suggested_status.destroy()
-            messagebox.showerror("Installation could not start", f"Could not start the installation worker: {exc}")
+            messagebox.showerror("Operation could not start", f"Could not start the worker: {exc}")
             return
         self.root.after(100, self.poll_suggested_result)
 
@@ -187,8 +216,10 @@ class Installer:
         self.remove_button.configure(state="normal")
         self.close_button.configure(state="normal")
         self.suggested_button.configure(state="normal")
+        self.suggested_refresh_button.configure(state="normal")
         for check in self.suggested_checks:
             check.configure(state="normal")
+        self.refresh_suggested_status()
 
     def poll_suggested_result(self) -> None:
         try:
@@ -198,11 +229,36 @@ class Installer:
             return
         self.suggested_status.destroy()
         self.finish_suggested_install()
-        sections = [f"{'Installed' if success else 'Failed'}: {name}\n{detail}" for name, success, detail in results]
+        sections = [f"{'Completed' if success else 'Failed'}: {name}\n{detail}" for name, success, detail in results]
         has_failures = any(not success for _, success, _ in results)
-        title = "Suggested installations completed with issues" if has_failures else "Suggested installations complete"
+        title = "Suggested changes completed with issues" if has_failures else "Suggested changes complete"
         message = "\n\n".join(sections)
         (messagebox.showwarning if has_failures else messagebox.showinfo)(title, message)
+        for variable in self.suggested_selected.values():
+            variable.set(False)
+        self.refresh_suggested_status()
+
+    def refresh_suggested_status(self) -> None:
+        status = suggested_installers.suggested_status()
+        by_id = {item.id: item for item in suggested_installers.SUGGESTED_ITEMS}
+        for item_id, (check, detail) in self.suggested_labels.items():
+            item = by_id[item_id]
+            locations = status[item_id]
+            action = "manual" if item_id == "rtk" and locations else "remove" if locations else "install"
+            if self.suggested_actions.get(item_id) not in (None, action):
+                self.suggested_selected[item_id].set(False)
+            self.suggested_actions[item_id] = action
+            if item_id == "rtk" and locations:
+                detail.configure(text=f"{item.description} Installed at {locations}. Remove manually with your package manager.")
+                check.configure(text=f"{item.name} (manual removal)", state="disabled")
+                self.suggested_selected[item_id].set(False)
+            elif locations:
+                detail.configure(text="Installed at: " + ", ".join(map(str, locations)))
+                check.configure(text=f"Remove {item.name}", state="disabled" if self.suggested_busy else "normal")
+            else:
+                detail.configure(text=f"Not installed in supported locations. {item.description}")
+                check.configure(text=f"Install {item.name}", state="disabled" if self.suggested_busy else "normal")
+        self.suggested_refresh_button.configure(state="disabled" if self.suggested_busy else "normal")
 
     def scope_changed(self) -> None:
         self.refresh_preview()

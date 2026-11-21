@@ -292,3 +292,35 @@ def write_instruction_updates(plans: list[InstructionUpdate], client: str = "cod
 
 def write_instruction_removals(plans: list[InstructionUpdate], client: str = "codex") -> list[Path]:
     return _write_instruction_plans(plans, allow_hidden=True, client=client)
+
+
+def plan_selected_removals(scope: str, repo_root: Path | None, names: list[str], client: str = "codex") -> list[InstructionUpdate]:
+    """Remove selected skill references while preserving other managed instructions."""
+    selected = set(common.validate_selection(names, common.SKILL_NAMES, "skill"))
+    plans = []
+    for kind, root in _instruction_roots(scope, repo_root, client):
+        _instruction_path(root, client)
+        filenames = ("CLAUDE.md",) if client == "claude" else ("AGENTS.override.md", "AGENTS.md")
+        for path in (root / name for name in filenames):
+            if not path.exists():
+                continue
+            if common.is_link_or_reparse(path) or not path.is_file():
+                raise ValueError(f"Invalid instruction file: {path}")
+            original = path.read_bytes()
+            bom = b"\xef\xbb\xbf" if original.startswith(b"\xef\xbb\xbf") else b""
+            try:
+                text = original[len(bom):].decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError("Instruction file must be valid UTF-8 to preserve it safely.") from exc
+            newline = "\r\n" if "\r\n" in text else "\n"
+            existing = _parse_block(text, kind, newline, client)
+            if not existing or not selected.intersection(existing):
+                continue
+            remaining = [name for name in existing if name not in selected]
+            if remaining:
+                start, end = text.index(BEGIN), text.index(END) + len(END)
+                proposed = bom + (text[:start] + _block(remaining, kind, newline, client) + text[end:]).encode("utf-8")
+            else:
+                proposed = _removed_bytes(original, kind, client)
+            plans.append(InstructionUpdate(path, original, proposed, "Remove selected"))
+    return plans

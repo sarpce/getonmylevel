@@ -16,6 +16,7 @@ import common
 import codegraph_installer
 import instruction_integration
 import suggested_installers
+import skill_operations
 
 
 SOURCE_ROOT = Path(__file__).resolve().parent.parent / "skills"
@@ -31,12 +32,7 @@ SKILL_DESCRIPTIONS = {
 }
 
 
-def perform_install(copies, instruction_plans, client="codex"):
-    """Copy skills before writing their default-use instructions."""
-    result = common.copy_skills(copies)
-    written = instruction_integration.write_instruction_updates(instruction_plans, client)
-    return result, written
-
+perform_install = skill_operations.perform_install
 
 class Installer:
     def __init__(self, root: tk.Tk, parent=None, configure_window: bool = True) -> None:
@@ -164,6 +160,8 @@ class Installer:
         self.skill_button.pack(side="right")
         self.remove_button = ttk.Button(buttons, text="Remove getonmylevel instructions", command=self.remove_instructions)
         self.remove_button.pack(side="right", padx=(0, 8))
+        self.remove_skills_button = ttk.Button(buttons, text="Remove selected skills", command=self.remove_skills)
+        self.remove_skills_button.pack(side="right", padx=(0, 8))
         self.close_button = ttk.Button(buttons, text="Close", command=self.close)
         self.close_button.pack(side="right", padx=(0, 8))
         self.suggested_busy = False
@@ -280,12 +278,14 @@ class Installer:
         self.suggested_button.configure(state="disabled")
         self.skill_button.configure(state="disabled")
         self.remove_button.configure(state="disabled")
+        self.remove_skills_button.configure(state="disabled")
         try:
             confirmed = messagebox.askyesno("Confirm suggested changes", confirmation)
         except tk.TclError as exc:
             self.suggested_button.configure(state="normal")
             self.skill_button.configure(state="normal")
             self.remove_button.configure(state="normal")
+            self.remove_skills_button.configure(state="normal")
             messagebox.showerror("Confirmation unavailable", f"Could not show the confirmation dialog: {exc}")
             return
         finally:
@@ -294,6 +294,7 @@ class Installer:
             self.suggested_button.configure(state="normal")
             self.skill_button.configure(state="normal")
             self.remove_button.configure(state="normal")
+            self.remove_skills_button.configure(state="normal")
             return
         self.start_suggested_install(installs, removals)
 
@@ -301,6 +302,7 @@ class Installer:
         self.suggested_busy = True
         self.skill_button.configure(state="disabled")
         self.remove_button.configure(state="disabled")
+        self.remove_skills_button.configure(state="disabled")
         self.close_button.configure(state="disabled")
         self.suggested_button.configure(state="disabled")
         self.suggested_refresh_button.configure(state="disabled")
@@ -334,6 +336,7 @@ class Installer:
         self.suggested_busy = False
         self.skill_button.configure(state="normal")
         self.remove_button.configure(state="normal")
+        self.remove_skills_button.configure(state="normal")
         self.close_button.configure(state="normal")
         self.suggested_button.configure(state="normal")
         self.suggested_refresh_button.configure(state="normal")
@@ -407,11 +410,25 @@ class Installer:
             repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
             if repo_root is not None and common.canonical(repo_root) == SOURCE_REPO:
                 raise ValueError("The target repository must differ from this source checkout.")
-            roots = common.skill_roots(self.scope.get(), repo_root, client)
-            copies = common.preflight_skill_copy(SOURCE_ROOT, names, roots)
-            instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names, client)
+            roots, copies, instruction_plans = skill_operations.plan_install(names, self.scope.get(), repo_root, client)
         codegraph_plan = codegraph_installer.plan_install(client) if wants_codegraph else None
         return names, roots, copies, instruction_plans, codegraph_plan
+
+    def remove_skills(self) -> None:
+        try:
+            names = [name for name, var in self.selected.items() if var.get()]
+            paths, plans = skill_operations.plan_remove(names, self.scope.get(), self.repo_path.get(), self.selected_client())
+            actions = [str(path) for path, _ in paths] + [str(plan.path) for plan in plans]
+            if not actions:
+                messagebox.showinfo("Nothing to remove", "No selected skills or instruction references were found.")
+                return
+            if not messagebox.askyesno("Confirm skill removal", "Remove selected skills and their instruction references? Skill directories are preserved in backups.\n\n" + "\n".join(actions)):
+                return
+            backups, written = skill_operations.perform_remove(paths, plans, self.selected_client())
+            self.refresh_preview()
+            messagebox.showinfo("Skills removed", "Backups:\n" + ("\n".join(backups) or "None") + "\n\nInstructions updated:\n" + ("\n".join(map(str, written)) or "None"))
+        except (OSError, ValueError, RuntimeError) as exc:
+            messagebox.showerror("Removal stopped", str(exc))
 
     def remove_instructions(self) -> None:
         try:
@@ -516,7 +533,7 @@ class Installer:
 
     def start_install_worker(self, names, copies, instruction_plans, codegraph_plan, client) -> None:
         self.install_busy = True
-        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, self.codegraph_check, *self.client_buttons, *self.skill_checks):
+        for widget in (self.skill_button, self.remove_button, self.remove_skills_button, self.close_button, self.suggested_button, self.codegraph_check, *self.client_buttons, *self.skill_checks):
             widget.configure(state="disabled")
         self.install_status = tk.Toplevel(self.root)
         self.install_status.title("Installing selected components")
@@ -570,7 +587,7 @@ class Installer:
 
     def finish_install_worker(self) -> None:
         self.install_busy = False
-        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, self.codegraph_check, *self.client_buttons, *self.skill_checks):
+        for widget in (self.skill_button, self.remove_button, self.remove_skills_button, self.close_button, self.suggested_button, self.codegraph_check, *self.client_buttons, *self.skill_checks):
             widget.configure(state="normal")
         claude = self.client.get() == "claude"
         self.suggested_button.configure(state="disabled" if claude else "normal")

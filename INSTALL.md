@@ -58,133 +58,18 @@ The confirmation shows selected versions/commits, planned commands/actions, dest
 
 Maintainers update pins in `tools/codegraph_installer.py` (`PACKAGE_VERSION`) and `tools/suggested_installers.py` (`LAST30_COMMIT`, `CLI_ANYTHING_COMMIT`). Review upstream release notes and diffs, select immutable versions/commit IDs, validate the expected files and installer behavior, run the mocked/local-repository test suite, then update this document and README. Record actual integration-test evidence before describing a pin as tested. Pins do not make registries or Git hosting immutable, validate publisher identity, pin npm transitive dependencies or downloads performed by upstream scripts, or guarantee platform-specific installer behavior. Existing installations may have unknown provenance.
 
-### Terminal fallback
+### Scriptable installation
 
-The terminal fallback supports **Codex only** and new installations only. Existing skill destinations are refused to prevent overwriting them. To install for Claude Code or update an existing installation with a backup of its current contents, use the graphical installer above. Run the Codex terminal commands from this repository root and edit the exact allowlisted names, scopes, and repository root. The script preflights selected source files and every destination, including symlinks, before it creates directories or copies files. The terminal fallback only copies skills; add equivalent default-use instructions to the applicable `AGENTS.md` yourself, or use the GUI installer for integrated instructions.
-
-PowerShell:
-
-```powershell
-$ErrorActionPreference = 'Stop'
-$allowedNames = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering', 'getonmylevel-design', 'getonmylevel-good-software-engineering-practices', 'getonmylevel-skill-discovery')
-$names = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering', 'getonmylevel-design', 'getonmylevel-good-software-engineering-practices', 'getonmylevel-skill-discovery')
-$scopes = @('user') # 'repo' or @('user', 'repo') are also supported
-$targetRepo = 'C:\path\to\target-repository'
-if ($names.Count -eq 0) { throw 'Select at least one skill.' }
-$seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-foreach ($name in $names) {
-  if ($name -cnotin $allowedNames) { throw "Unknown skill: $name" }
-  if (-not $seen.Add($name)) { throw "Duplicate skill: $name" }
-}
-if ($scopes.Count -eq 0) { throw 'Select at least one scope.' }
-$validScopes = @('user', 'repo')
-$seenScopes = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-foreach ($scope in $scopes) {
-  if ($scope -cnotin $validScopes) { throw "Unknown scope: $scope" }
-  if (-not $seenScopes.Add($scope)) { throw "Duplicate scope: $scope" }
-}
-$sourceRoot = Join-Path (Get-Location) 'skills'
-$sourceRepo = [System.IO.Path]::GetFullPath((Get-Location).Path).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
-if ($scopes -contains 'repo') {
-  if (-not (Test-Path -LiteralPath $targetRepo -PathType Container)) { throw "Target repository does not exist: $targetRepo" }
-  $targetFull = [System.IO.Path]::GetFullPath($targetRepo).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
-  if ($targetFull -eq $sourceRepo) { throw 'Target repository must differ from this source checkout.' }
-}
-$roots = @(foreach ($scope in $scopes) {
-  if ($scope -ceq 'user') { Join-Path $HOME '.agents/skills' }
-  else { Join-Path $targetRepo '.agents/skills' }
-})
-$rootSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-for ($i = 0; $i -lt $roots.Count; $i++) {
-  $roots[$i] = [System.IO.Path]::GetFullPath($roots[$i])
-  if (-not $rootSet.Add($roots[$i])) { throw "Scopes resolve to the same destination: $($roots[$i])" }
-  if ((Test-Path -LiteralPath $roots[$i]) -and -not (Test-Path -LiteralPath $roots[$i] -PathType Container)) { throw "Destination root is not a directory: $($roots[$i])" }
-}
-$sources = foreach ($name in $names) { Join-Path $sourceRoot $name }
-foreach ($source in $sources) {
-  if (-not (Test-Path -LiteralPath (Join-Path $source 'SKILL.md') -PathType Leaf)) { throw "Missing SKILL.md: $source" }
-}
-$destinations = foreach ($root in $roots) { foreach ($name in $names) { Join-Path $root $name } }
-$occupied = @($destinations | Where-Object { $null -ne (Get-Item -LiteralPath $_ -Force -ErrorAction SilentlyContinue) })
-if ($occupied.Count) { throw "Refusing to overwrite: $($occupied -join ', ')" }
-foreach ($root in $roots) {
-  New-Item -ItemType Directory -Force -Path $root | Out-Null
-  foreach ($name in $names) { Copy-Item -Recurse -LiteralPath (Join-Path $sourceRoot $name) -Destination $root }
-}
-```
-
-POSIX shell:
+The command works without Tkinter or a display, for Codex and Claude Code. It requires Python 3.11 or newer and uses only the standard library. Run it from the checkout (or use the full path to `tools/install.py`):
 
 ```sh
-set -e
-names='getonmylevel-communication getonmylevel-context getonmylevel-engineering getonmylevel-design getonmylevel-good-software-engineering-practices getonmylevel-skill-discovery'
-scopes='user' # 'repo' or 'user repo' are also supported
-target_repo='/path/to/target-repository'
-allowed_names=' getonmylevel-communication getonmylevel-context getonmylevel-engineering getonmylevel-design getonmylevel-good-software-engineering-practices getonmylevel-skill-discovery '
-allowed_scopes=' user repo '
-[ -n "$names" ] || { printf 'Select at least one skill.\n' >&2; exit 1; }
-seen=' '
-for name in $names; do
-  case "$allowed_names" in *" $name "*) ;; *) printf 'Unknown skill: %s\n' "$name" >&2; exit 1 ;; esac
-  case "$seen" in *" $name "*) printf 'Duplicate skill: %s\n' "$name" >&2; exit 1 ;; esac
-  seen="$seen$name "
-done
-[ -n "$scopes" ] || { printf 'Select at least one scope.\n' >&2; exit 1; }
-seen_scopes=' '
-for scope in $scopes; do
-  case "$allowed_scopes" in *" $scope "*) ;; *) printf 'Unknown scope: %s\n' "$scope" >&2; exit 1 ;; esac
-  case "$seen_scopes" in *" $scope "*) printf 'Duplicate scope: %s\n' "$scope" >&2; exit 1 ;; esac
-  seen_scopes="$seen_scopes$scope "
-done
-source_repo=$(pwd -P)
-user_home=$(cd -P "$HOME" && pwd)
-case " $scopes " in
-  *' repo '*)
-    [ -d "$target_repo" ] || { printf 'Target repository does not exist: %s\n' "$target_repo" >&2; exit 1; }
-    target_real=$(cd -P "$target_repo" && pwd)
-    [ "$target_real" != "$source_repo" ] || { printf 'Target must differ from this source checkout.\n' >&2; exit 1; }
-    ;;
-esac
-set --
-for scope in $scopes; do
-  case "$scope" in
-    user) set -- "$@" "$user_home/.agents/skills" ;;
-    repo) set -- "$@" "$target_real/.agents/skills" ;;
-  esac
-done
-seen_roots=' '
-for root do
-  case "$seen_roots" in
-    *" $root "*) printf 'Selected scopes resolve to the same destination: %s\n' "$root" >&2; exit 1 ;;
-  esac
-  seen_roots="$seen_roots$root "
-done
-for name in $names; do
-  [ -f "skills/$name/SKILL.md" ] || { printf 'Missing SKILL.md: %s\n' "skills/$name" >&2; exit 1; }
-done
-for root do
-  if [ -L "$root" ] && [ ! -e "$root" ]; then
-    printf 'Destination root is a dangling symlink: %s\n' "$root" >&2
-    exit 1
-  fi
-  if [ -e "$root" ] && [ ! -d "$root" ]; then
-    printf 'Destination root is not a directory: %s\n' "$root" >&2
-    exit 1
-  fi
-  for name in $names; do
-    if [ -e "$root/$name" ] || [ -L "$root/$name" ]; then
-      printf 'Refusing to overwrite: %s\n' "$root/$name" >&2
-      exit 1
-    fi
-  done
-done
-for root do
-  mkdir -p "$root"
-  for name in $names; do cp -R "skills/$name" "$root/"; done
-done
+python tools/install.py install --client codex --scope user
+python tools/install.py update --client claude --scope repo --repo /path/to/repository
+python tools/install.py remove --client codex --scope user --skills getonmylevel-context
+python tools/install.py install --client claude --scope both --repo /path/to/repository --dry-run
 ```
 
-To update a manual install, review the repository changes and replace only the selected skill directories in the relevant scope, preserving local edits. To remove a skill, delete only its `getonmylevel-*` directory. The optional `[[skills.config]]` setting can disable skills in the relevant Codex configuration; consult current documentation. Do not remove a shared parent directory containing other skills.
+All six skills are selected by default; `--skills` accepts one or more exact skill names. `install` and `update` both install missing skills and update existing ones. Updates and removals preserve previous directories in `getonmylevel-backups`. Removal also removes the selected skills from managed default-use instructions, retaining other skill references and surrounding text. `--dry-run` previews actions without writing; normal commands apply immediately and return a nonzero exit status on failure. Operations across multiple paths are not transactional. The command handles bundled skills and their instructions; agent roles, CodeGraph, and suggested third-party tools remain separate GUI operations.
 
 ## Session selection
 
@@ -208,7 +93,7 @@ Generated instructions let straightforward software changes proceed directly wit
 
 ## Context tools
 
-CodeGraph is an independently selectable user-wide recommendation. After confirmation, the GUI installs it if needed and configures the selected client globally; it may download packages and edit that client's MCP configuration and managed instructions. It does not initialize or index a project. The terminal fallback copies skill files only and does not install CodeGraph.
+CodeGraph is an independently selectable user-wide recommendation. After confirmation, the GUI installs it if needed and configures the selected client globally; it may download packages and edit that client's MCP configuration and managed instructions. It does not initialize or index a project. The scriptable skill command does not install CodeGraph.
 
 The GUI shows the planned global setup command and distinguishes an existing CodeGraph command from a planned package installation. If using CodeGraph manually, review its [repository and setup instructions](https://github.com/colbymchenry/codegraph); project indexing is separate from global client configuration.
 

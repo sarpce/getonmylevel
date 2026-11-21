@@ -1,6 +1,6 @@
 # getonmylevel
 
-**Practical skills and optional agent roles for Codex and Claude Code. Install from one desktop app.**
+**Practical skills and optional agent roles for Codex and Claude Code.**
 
 Six skills for communication, context, engineering, design, software practices, and skill discovery. Choose what you need.
 
@@ -34,6 +34,14 @@ python tools/install_gui.py
 
 Already have a skill installed? GUI updates it and keeps the old directory in a `getonmylevel-backups` folder beside the skills directory. A failed multi-skill operation can leave earlier changes in place; read the result. To open the same app through the agent entry point, run `python tools/agents_gui.py`.
 
+For headless or automated setup, install all bundled skills and their default-use instructions with:
+
+```sh
+python tools/install.py install --client codex --scope user
+```
+
+Use `--client claude` for Claude Code, `--dry-run` to preview, and `update` or `remove` for subsequent changes. See [scriptable installation](INSTALL.md#scriptable-installation) for scope and skill selection. Python 3.11+ is required.
+
 ## Use skills and agents
 
 The installer asks the selected client to read installed skills by default when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering` or `$getonmylevel-design`. Your instructions and higher-priority rules still apply.
@@ -54,7 +62,7 @@ The GUI offers optional [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](htt
 
 ## More details
 
-[INSTALL.md](INSTALL.md) has detailed destinations, update and removal behavior, optional tool prerequisites, and a terminal fallback when Tkinter is unavailable. The terminal fallback installs new Codex skill copies only; it does not add instructions or install CodeGraph.
+[INSTALL.md](INSTALL.md) has detailed destinations, update and removal behavior, optional tool prerequisites, and scriptable installation, updates, and removal for both clients without Tkinter or a display. The command also manages default-use instructions; CodeGraph remains a separate GUI operation.
 
 ## License
 

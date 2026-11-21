@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import platform
 import queue
+import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -30,13 +33,44 @@ MAX_SECONDS = 20
 MARKER = "# getonmylevel-managed-v1"
 
 
+def find_codex() -> str:
+    """Find Codex on PATH or in a standard Windows VS Code extension directory."""
+    names = ("codex.exe", "codex.cmd") if os.name == "nt" else ("codex",)
+    for name in names:
+        executable = shutil.which(name)
+        if executable:
+            return executable
+
+    if os.name == "nt":
+        architecture = "windows-arm64" if platform.machine().lower() in ("arm64", "aarch64") else "windows-x86_64"
+        candidates: list[tuple[tuple[int, ...], Path]] = []
+        for directory in (".vscode", ".vscode-insiders"):
+            extensions = Path.home() / directory / "extensions"
+            for extension in extensions.glob("openai.chatgpt-*"):
+                match = re.fullmatch(r"openai\.chatgpt-(\d+(?:\.\d+)+)(?:-[\w.-]+)?", extension.name)
+                if not match or not extension.is_dir():
+                    continue
+                executable = extension / "bin" / architecture / "codex.exe"
+                if executable.is_file():
+                    version = tuple(int(component) for component in match.group(1).split("."))
+                    candidates.append((version, executable))
+        if candidates:
+            return str(max(candidates, key=lambda candidate: candidate[0])[1])
+
+    raise FileNotFoundError(
+        "Codex was not found. Install Codex and make it available on PATH"
+        + (" or install the Codex VS Code extension in its standard location" if os.name == "nt" else "")
+        + ", then restart the GUI."
+    )
+
+
 class AppServer:
     """Small bounded JSON-RPC client for `codex app-server --listen stdio://`."""
 
     def __init__(self) -> None:
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.process = subprocess.Popen(
-            ["codex", "app-server", "--listen", "stdio://"],
+            [find_codex(), "app-server", "--listen", "stdio://"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

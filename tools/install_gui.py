@@ -14,11 +14,19 @@ except ImportError as exc:
     raise SystemExit(0)
 
 import common
+import instruction_integration
 import suggested_installers
 
 
 SOURCE_ROOT = Path(__file__).resolve().parent.parent / "skills"
 SOURCE_REPO = SOURCE_ROOT.parent.resolve()
+
+
+def perform_install(copies, instruction_plans):
+    """Copy skills before writing their default-use instructions."""
+    result = common.copy_skills(copies)
+    written = instruction_integration.write_instruction_updates(instruction_plans)
+    return result, written
 
 
 class Installer:
@@ -206,7 +214,8 @@ class Installer:
             raise ValueError("The target repository must differ from this source checkout.")
         roots = common.skill_roots(self.scope.get(), repo_root)
         copies = common.preflight_skill_copy(SOURCE_ROOT, names, roots)
-        return names, roots, copies
+        instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names)
+        return names, roots, copies, instruction_plans
 
     def refresh_preview(self) -> None:
         try:
@@ -216,11 +225,16 @@ class Installer:
             repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
             roots = common.skill_roots(self.scope.get(), repo_root)
             plan = common.preflight_skill_copy(SOURCE_ROOT, names, roots) if names else []
+            instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names) if names else []
             lines = [f"Skills: {', '.join(names) if names else '(none selected)'}", "Actions:"]
             lines.extend(f"  {'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in plan)
             if any(operation.is_update for operation in plan):
                 lines.append("\nUpdates replace the selected skill directory. Its previous contents are preserved in a backup.")
             lines.append("\nThe checked-out skill files are the versions this installer installs.")
+            if instruction_plans:
+                lines.append("\nCodex default-use instructions (existing text is preserved):")
+                lines.extend(f"  {item.action}: {item.path}" for item in instruction_plans)
+                lines.append("The managed instruction asks Codex to read these skills by default when relevant. A new conversation may be needed; higher-priority instructions still apply.")
             if not names:
                 lines.append("Select at least one skill before installing.")
         except (OSError, ValueError) as exc:
@@ -232,14 +246,16 @@ class Installer:
 
     def install(self) -> None:
         try:
-            names, roots, copies = self.selections()
+            names, roots, copies, instruction_plans = self.selections()
             actions = [f"{'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in copies]
+            actions.extend(f"Instructions ({item.action.lower()}): {item.path}" for item in instruction_plans)
             confirmation = "Use the skill versions in this checkout?\n\n" + "\n".join(actions)
             if any(operation.is_update for operation in copies):
                 confirmation += "\n\nUpdates replace selected directories and preserve their previous contents in backups."
+            confirmation += "\n\nCodex will be instructed to read these skills by default when relevant. Existing instruction text is preserved. A new conversation may be needed; higher-priority instructions still apply."
             if not messagebox.askyesno("Confirm installation or update", confirmation):
                 return
-            result = common.copy_skills(copies)
+            result, written = perform_install(copies, instruction_plans)
             sections = []
             if result.installed:
                 sections.append("Installed:\n" + "\n".join(result.installed))
@@ -247,9 +263,32 @@ class Installer:
                 sections.append("Updated:\n" + "\n".join(result.updated))
             if result.backups:
                 sections.append("Backups:\n" + "\n".join(result.backups))
-            messagebox.showinfo("Installation complete", "\n\n".join(sections) + "\n\nNo Codex settings or global instructions were changed.")
+            if written:
+                sections.append("Instruction files updated:\n" + "\n".join(map(str, written)))
+            unchanged = [str(item.path) for item in instruction_plans if item.path not in written]
+            if unchanged:
+                sections.append("Instruction files already current:\n" + "\n".join(unchanged))
+            messagebox.showinfo("Installation complete", "\n\n".join(sections))
         except (OSError, ValueError) as exc:
-            messagebox.showerror("Installation stopped", str(exc))
+            details = str(exc)
+            if isinstance(exc, common.SkillCopyError):
+                parts = []
+                if exc.installed:
+                    parts.append("Skills already installed: " + ", ".join(exc.installed))
+                if exc.updated:
+                    parts.append("Skills already updated: " + ", ".join(exc.updated))
+                if exc.backups:
+                    parts.append("Backups: " + ", ".join(exc.backups))
+                if parts:
+                    details += "\n\n" + "\n".join(parts) + "\nInstructions were not written because skill copying failed."
+            elif isinstance(exc, instruction_integration.InstructionWriteError):
+                details += "\n\nSkills may already be installed or updated. The instruction operation is not transactional."
+                if exc.written:
+                    details += "\nInstruction files already written: " + ", ".join(map(str, exc.written))
+                details += "\nFailed instruction file: " + str(exc.path)
+            elif 'instruction_plans' in locals():
+                details += "\n\nSkills may already be installed or updated. The instruction operation is not transactional; an earlier instruction file may already have been written. Planned instruction files: " + ", ".join(str(item.path) for item in instruction_plans)
+            messagebox.showerror("Installation stopped", details)
 
 
 def main() -> None:

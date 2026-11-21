@@ -56,9 +56,9 @@ class InstructionIntegrationTests(unittest.TestCase):
         self.assertEqual(integration.write_instruction_updates(current), [])
         self.assertEqual(current[0].path.read_bytes(), before)
 
-    def test_new_mode_guidance_is_generated_for_both_clients_and_scopes(self):
-        required = ("any software edit", "small fixes", "multiple-choice popup", "actual answer",
-                    "independent reviewer and tester", "higher-priority")
+    def test_direct_work_default_is_generated_for_both_clients_and_scopes(self):
+        required = ("straightforward software changes directly", "agent-based work",
+                    "independent review and testing", "each disabled unless selected", "higher-priority")
         for client in ("codex", "claude"):
             for scope in ("user", "repo"):
                 with self.subTest(client=client, scope=scope):
@@ -66,33 +66,51 @@ class InstructionIntegrationTests(unittest.TestCase):
                     for phrase in required:
                         self.assertIn(phrase, block)
 
-    def test_legacy_managed_block_upgrades_and_remains_removable(self):
+    def test_previous_managed_blocks_upgrade_and_remain_removable_for_clients_and_scopes(self):
+        claude = self.root / "claude"
+        claude.mkdir()
+        for client in ("codex", "claude"):
+            for scope in ("user", "repo"):
+                with self.subTest(client=client, scope=scope):
+                    env_name = "CLAUDE_CONFIG_DIR" if client == "claude" else "CODEX_HOME"
+                    user_root = claude if client == "claude" else self.codex
+                    root = user_root if scope == "user" else self.repo
+                    filename = "CLAUDE.md" if client == "claude" else "AGENTS.md"
+                    path = root / filename
+                    with mock.patch.dict(os.environ, {env_name: str(user_root)}):
+                        path.write_text("Before\n" + integration._previous_block(SKILLS[:1], scope, "\n", client) + "\nAfter\n", encoding="utf-8")
+                        plan, = integration.plan_instruction_updates(scope, self.repo if scope == "repo" else None, SKILLS[:1], client)
+                        self.assertEqual(plan.action, "Update")
+                        integration.write_instruction_updates([plan], client)
+                        updated = path.read_text(encoding="utf-8")
+                        self.assertIn("straightforward software changes directly", updated)
+                        self.assertTrue(updated.startswith("Before\n"))
+                        self.assertTrue(updated.endswith("\nAfter\n"))
+                        self.assertEqual(integration.plan_instruction_updates(scope, self.repo if scope == "repo" else None, SKILLS[:1], client)[0].action, "Already current")
+                        removal, = integration.plan_instruction_removals(scope, self.repo if scope == "repo" else None, client)
+                        integration.write_instruction_removals([removal], client)
+                        self.assertEqual(path.read_text(encoding="utf-8"), "Before\nAfter\n")
+
+    def test_older_legacy_managed_block_upgrades(self):
         path = self.codex / "AGENTS.md"
-        legacy = integration._legacy_block(SKILLS[:1], "user", "\n")
-        path.write_text("Before\n" + legacy + "\nAfter\n", encoding="utf-8")
+        path.write_text(integration._legacy_block(SKILLS[:1], "user", "\n"), encoding="utf-8")
         plan, = integration.plan_instruction_updates("user", None, SKILLS[:1])
         self.assertEqual(plan.action, "Update")
         integration.write_instruction_updates([plan])
-        updated = path.read_text(encoding="utf-8")
-        self.assertIn("Simple or Agent-based", updated)
-        self.assertTrue(updated.startswith("Before\n"))
-        self.assertTrue(updated.endswith("\nAfter\n"))
-        removal, = integration.plan_instruction_removals("user", None)
-        integration.write_instruction_removals([removal])
-        self.assertEqual(path.read_text(encoding="utf-8"), "Before\nAfter\n")
+        self.assertIn("straightforward software changes directly", path.read_text(encoding="utf-8"))
 
     def test_legacy_claude_block_upgrades(self):
         claude = self.root / "claude"
         claude.mkdir()
         with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude)}):
             path = claude / "CLAUDE.md"
-            path.write_text(integration._legacy_block(SKILLS[:1], "user", "\n", "claude"), encoding="utf-8")
+            path.write_text(integration._previous_block(SKILLS[:1], "user", "\n", "claude"), encoding="utf-8")
             plan, = integration.plan_instruction_updates("user", None, SKILLS[:1], "claude")
             self.assertEqual(plan.action, "Update")
             integration.write_instruction_updates([plan], "claude")
-            self.assertIn("multiple-choice popup", path.read_text(encoding="utf-8"))
+            self.assertIn("straightforward software changes directly", path.read_text(encoding="utf-8"))
 
-    def test_clipboard_selector_contains_popup_wait_and_software_mode_rules(self):
+    def test_clipboard_selector_uses_direct_default_and_keeps_review_choices(self):
         class Clipboard:
             def __init__(self):
                 self.value = ""
@@ -109,8 +127,13 @@ class InstructionIntegrationTests(unittest.TestCase):
         gui.root = Clipboard()
         with mock.patch.object(agents_gui.messagebox, "showinfo"):
             gui.copy_selector()
-        for phrase in ("any software edit", "multiple-choice popup", "actual response", "reviewer and tester"):
-            self.assertIn(phrase, gui.root.value)
+        copied = gui.root.value.casefold()
+        for phrase in ("without an up-front workflow choice", "agent-based work", "independent review and testing",
+                       "For the skill-selection choice, use a choice interface",
+                       "each disabled unless selected",
+                       "wait for the selection before dependent work"):
+            self.assertIn(phrase.casefold(), copied)
+        self.assertNotIn("choose simple or agent-based", copied)
 
     def test_discovery_skill_adds_instruction_to_existing_block(self):
         path = self.codex / "AGENTS.md"

@@ -177,7 +177,7 @@ To update a manual install, review the repository changes and replace only the s
 
 ## Session selection
 
-The optional selector instruction in [`optional/global-session-selector.md`](optional/global-session-selector.md) supports **On**, **Off**, and **Ask** preferences for the original five skills. It also states that Simple/Agent-based development choice is independent of skill selection. Merge it manually with your effective global instructions; it does not edit or override them. These are conversation conventions, not enforced Codex settings. The GUI can copy a generated instruction block without changing any file.
+The optional selector instruction in [`optional/global-session-selector.md`](optional/global-session-selector.md) supports **On**, **Off**, and **Ask** preferences for the original five skills. It sets the direct-work default independently of skill selection, while leaving agent-based work available under the active session's delegation rules. Merge it manually with your effective global instructions; it does not edit or override them. These are conversation conventions, not enforced Codex settings. The GUI can copy a generated instruction block without changing any file.
 
 Explicit skill invocation uses `$getonmylevel-communication`, `$getonmylevel-context`, `$getonmylevel-engineering`, `$getonmylevel-design`, `$getonmylevel-good-software-engineering-practices`, or `$getonmylevel-skill-discovery`. Higher-priority instructions and available tools always constrain activation; the installed client determines whether a skill is discovered and invoked.
 
@@ -193,7 +193,7 @@ Choose roles and global user, repository, or both scopes. Global files go to `$C
 
 Model and effort fields are editable. Blank values inherit Codex defaults. **Refresh available models** is an explicit request to the local `codex app-server`; it requires Codex on `PATH` or, on Windows, the Codex VS Code extension installed in its standard location. It uses the documented [`model/list` API](https://developers.openai.com/codex/app-server) and [`agents` configuration](https://developers.openai.com/codex/multi-agent). Model discovery may be unavailable; in that case enter values manually. A listed model does not guarantee account access or entitlement. The tool does not log credentials or make network calls itself.
 
-Before any software edit, including small fixes, tests, configuration, documentation, or skills, the generated main instructions ask the user to choose Simple or Agent-based for that request. Agent-based mode asks separately about reviewer and tester. When an answer-capable multiple-choice popup is available, instructions require using it and waiting for the actual answer; otherwise the question stays pending in chat. These are natural-language instructions and cannot override higher-priority session rules or guarantee client behavior. Agent-based work uses the configured designer then implementer, followed by fresh reviewer and tester agents when selected and available.
+Generated instructions let straightforward software changes proceed directly without a mode prompt. Agent-based work is available when explicitly requested or useful under the active session's delegation rules. For larger work, the configured designer and implementer can be used when delegation is permitted. Independent review and testing remain separate choices, each disabled unless selected. These are natural-language instructions and cannot override higher-priority session rules or guarantee client behavior.
 
 ## Context tools
 

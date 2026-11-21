@@ -10,7 +10,7 @@ Six skills for communication, context, engineering, design, software practices, 
 | --- | --- |
 | [Communication](skills/getonmylevel-communication/SKILL.md) | Clear, concise answers. |
 | [Context](skills/getonmylevel-context/SKILL.md) | Find relevant project context efficiently. |
-| [Engineering](skills/getonmylevel-engineering/SKILL.md) | Guide software work; choose Simple or Agent-based workflow. |
+| [Engineering](skills/getonmylevel-engineering/SKILL.md) | Guide software work with direct defaults and optional agent-based workflows. |
 | [Design](skills/getonmylevel-design/SKILL.md) | Design deliberate, usable interfaces. |
 | [Good software engineering practices](skills/getonmylevel-good-software-engineering-practices/SKILL.md) | Keep software changes correct, secure, and maintainable. |
 | [Skill discovery](skills/getonmylevel-skill-discovery/SKILL.md) | Find useful available skills for each task. |
@@ -38,7 +38,7 @@ Already have a skill installed? GUI updates it and keeps the old directory in a 
 
 The installer asks Codex to read selected skills by default when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering` or `$getonmylevel-design`. Your instructions and higher-priority rules still apply.
 
-Before any software edit, including small fixes, tests, configuration, documentation, and skills, the instructions ask you to choose **Simple** or **Agent-based** for that request. In Agent-based mode, reviewer and tester are separate choices. When a multiple-choice popup is available, it is used and the workflow waits for your answer; otherwise the question remains pending in chat. Higher-priority session instructions still apply. Simple means the main agent works directly. Agent-based uses a designer and then an implementer; configure optional roles in the Agents tab.
+Straightforward tasks proceed directly. For example, a one-line bug fix or documentation edit needs no workflow prompt. Agent-based work remains available when you request it or it would materially help under the active session's delegation rules. For a larger cross-module change, the engineering skill can use the configured designer and implementer roles. Independent review and testing remain separate choices, each disabled unless you select it. Higher-priority session instructions still apply.
 
 The Agents tab can also copy an optional On/Off/Ask session preference block. It does not write that block to a file; merge it into your instructions yourself if wanted. See [session selector](optional/global-session-selector.md) for its scope.
 

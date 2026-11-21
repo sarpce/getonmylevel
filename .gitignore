@@ -1,0 +1,17 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local secrets and project-specific agent state
+.env
+.env.*
+!.env.example
+!.env.*.example
+/.codex/
+/.agents/
+/.getonmylevel/
+
+# Local CodeGraph index
+/.codegraph/

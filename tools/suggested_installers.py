@@ -18,6 +18,30 @@ LAST30_URL = "https://github.com/mvanhorn/last30days-skill"
 CLI_ANYTHING_URL = "https://github.com/HKUDS/CLI-Anything"
 LAST30_COMMIT = "bb2f1ed2b9f6d07b90557c5eebd736b566533fec"
 CLI_ANYTHING_COMMIT = "34f519533bc175d2fe287ab8316b0dd99bb9cc43"
+IMPECCABLE_URL = "https://github.com/pbakaus/impeccable"
+IMPECCABLE_COMMIT = "b49177d32788f2dc585c42831d845dacf1ebed2c"
+UI_UX_PRO_MAX_URL = "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill"
+UI_UX_PRO_MAX_COMMIT = "a38d04c3d5c298c851dbe5e6ee1965ee3de42cb5"
+ANTI_UI_SLOP_URL = "https://github.com/uizze/uizze"
+ANTI_UI_SLOP_COMMIT = "4a0224f578f65a87f328e9c533b3d8bf1023c1f7"
+
+_OPTIONAL_DESIGN_SKILLS = {
+    "impeccable": ("impeccable", IMPECCABLE_URL, IMPECCABLE_COMMIT,
+                   ".agents/skills/impeccable", ("SKILL.md", "reference", "scripts", "agents"),
+                   ("LICENSE", "NOTICE.md"), "Impeccable design critique, audit, and polish skill"),
+    "ui_ux_pro_max": ("ui-ux-pro-max", UI_UX_PRO_MAX_URL, UI_UX_PRO_MAX_COMMIT,
+                      ".claude/skills/ui-ux-pro-max", ("SKILL.md", "data", "scripts", "references"),
+                      ("LICENSE",), "UI UX Pro Max design-system and interface guidance"),
+    "anti_ui_slop": ("anti-ui-slop", ANTI_UI_SLOP_URL, ANTI_UI_SLOP_COMMIT,
+                     "skills/anti-ui-slop", ("SKILL.md", "LICENSE", "NOTICE"), (),
+                     "Anti UI Slop product-specific design and UI review skill"),
+}
+
+_DESIGN_SKILL_EFFECTS = {
+    "impeccable": "Its engine may download a platform binary on first use. The optional hook and live mode are not configured.",
+    "ui_ux_pro_max": "Uses bundled Python 3 scripts and data. Its Codex skill path is adapted from the upstream Claude path.",
+    "anti_ui_slop": "Uses its upstream public design catalogue when the agent follows a catalogue link.",
+}
 
 
 @dataclass(frozen=True)
@@ -142,7 +166,8 @@ def _skill_roots() -> tuple[Path, ...]:
 
 
 def _skill_destinations(item_id: str) -> tuple[Path, ...]:
-    name = {"last30days": "last30days", "cli_anything": "cli-anything"}.get(item_id)
+    name = {"last30days": "last30days", "cli_anything": "cli-anything",
+            **{key: value[0] for key, value in _OPTIONAL_DESIGN_SKILLS.items()}}.get(item_id)
     if name is None:
         return ()
     return tuple(root / name for root in _skill_roots() if _is_present(root / name))
@@ -160,11 +185,12 @@ def suggested_status() -> dict[str, tuple[Path, ...] | str | None]:
     """Return detected locations for suggested installs; RTK is only detected on PATH."""
     return {"last30days": _skill_destinations("last30days"),
             "cli_anything": _skill_destinations("cli_anything"),
+            **{item_id: _skill_destinations(item_id) for item_id in _OPTIONAL_DESIGN_SKILLS},
             "rtk": shutil.which("rtk")}
 
 
 def plan_removal(item_id: str) -> tuple[SuggestedRemovalPlan | None, str | None]:
-    if item_id not in ("last30days", "cli_anything"):
+    if item_id not in ("last30days", "cli_anything", *_OPTIONAL_DESIGN_SKILLS):
         return None, "Only detected skill directories can be removed here."
     paths = _skill_destinations(item_id)
     if not paths:
@@ -362,6 +388,127 @@ def _cli_plan(system: str | None = None) -> tuple[SuggestedInstallPlan | None, s
                                 (command, *fetch_commands, installer), data=(os.path.abspath(git), os.path.abspath(shell), system)), None
 
 
+def _validate_git_tree(git: str, checkout: Path, commit: str, source_paths: tuple[str, ...]) -> tuple[bool, str]:
+    command = (git, "-C", str(checkout), "ls-tree", "-rz", "-r", "-t", commit, "--", *source_paths)
+    try:
+        result = _run(command)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"Could not inspect pinned skill files. {exc}"
+    if result.returncode:
+        return False, f"Could not inspect pinned skill files. {_output(result)}"
+    output = result.stdout
+    entries = output.encode("utf-8", errors="surrogateescape").split(b"\0")
+    found = set()
+    for entry in entries:
+        if not entry:
+            continue
+        metadata, path = entry.split(b"\t", 1)
+        mode, object_type, _ = metadata.decode("ascii").split(" ", 2)
+        if mode in ("120000", "160000"):
+            return False, f"Pinned skill source contains a symlink or submodule at {path.decode('utf-8', errors='replace')}"
+        found.add(path.decode("utf-8", errors="surrogateescape"))
+    missing = [path for path in source_paths
+               if path not in found and not any(entry.startswith(path.rstrip("/") + "/") for entry in found)]
+    if missing:
+        return False, "Pinned checkout is missing required skill files: " + ", ".join(missing)
+    return True, "Verified selected skill files are regular tracked files."
+
+
+def _design_skill_plan(item_id: str) -> tuple[SuggestedInstallPlan | None, str | None]:
+    name, url, commit, source_path, required_paths, license_paths, description = _OPTIONAL_DESIGN_SKILLS[item_id]
+    git = _git_path()
+    if not git:
+        return None, f"Git is required. Install manually from {url}."
+    destination = Path.home() / ".agents" / "skills" / name
+    existing = _skill_destinations(item_id)
+    if existing:
+        return None, "Already installed at " + ", ".join(map(str, existing))
+    try:
+        _safe_destination(destination)
+    except (OSError, ValueError) as exc:
+        return None, f"{exc}. Manual instructions: {url}"
+
+    source_files = (source_path, *license_paths)
+    commands = ((os.path.abspath(git), "init", "<temporary checkout>"),
+                (os.path.abspath(git), "-C", "<temporary checkout>", "remote", "add", "origin", url),
+                (os.path.abspath(git), "-C", "<temporary checkout>", "fetch", "--depth", "1", "origin", commit),
+                (os.path.abspath(git), "-C", "<temporary checkout>", "checkout", "--detach", commit),
+                (os.path.abspath(git), "-C", "<temporary checkout>", "rev-parse", "HEAD"),
+                (os.path.abspath(git), "-C", "<temporary checkout>", "ls-tree", "-rz", "-r", "-t", commit, "--", *source_files),
+                ("copy", f"<checkout>/{source_path}", str(destination)))
+    details = (f"Installs the complete {description} from selected commit {commit} to {destination}. Requires Git and network access. "
+               f"The installer verifies checkout HEAD and checks the selected skill files for symlinks before copying. "
+               f"It does not execute the downloaded skill or configure hooks. {_DESIGN_SKILL_EFFECTS[item_id]} Upstream: {url}.")
+    return SuggestedInstallPlan(item_id, description, destination, details, commands,
+                                data=(os.path.abspath(git), commit, source_path, *required_paths, *license_paths)), None
+
+
+def _design_skill_installer(plan: SuggestedInstallPlan) -> tuple[bool, str]:
+    git, commit, source_path, *required_and_licenses = plan.data
+    required_count = len(_OPTIONAL_DESIGN_SKILLS[plan.id][4])
+    required_paths = tuple(required_and_licenses[:required_count])
+    license_paths = tuple(required_and_licenses[required_count:])
+    destination = plan.destination
+    assert destination is not None
+    try:
+        _ensure_no_alternate_install(plan.id, destination)
+        _safe_destination(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f"getonmylevel-{plan.id}-") as temp:
+            checkout = Path(temp) / "checkout"
+            ok, detail = _clone(git, _OPTIONAL_DESIGN_SKILLS[plan.id][1], commit, checkout)
+            if not ok:
+                return False, detail
+            source = checkout / Path(source_path)
+            all_paths = (source_path, *license_paths)
+            ok, detail = _validate_git_tree(git, checkout, commit, all_paths)
+            if not ok:
+                return False, detail
+            _reject_linked_tree(source)
+            for relative_path in required_paths:
+                entry = source / relative_path
+                if relative_path in ("SKILL.md", "LICENSE", "NOTICE", "NOTICE.md"):
+                    if not entry.is_file():
+                        return False, f"Required skill file is missing: {entry}"
+                elif not entry.is_dir():
+                    return False, f"Required skill resources are missing: {entry}"
+
+            stage_parent = Path(tempfile.mkdtemp(prefix=f".{destination.name}-stage-", dir=destination.parent))
+            stage = stage_parent / destination.name
+            try:
+                shutil.copytree(source, stage, symlinks=False)
+                for license_path in license_paths:
+                    shutil.copy2(checkout / license_path, stage / Path(license_path).name)
+                if plan.id == "ui_ux_pro_max":
+                    skill_file = stage / "SKILL.md"
+                    skill_text = skill_file.read_text(encoding="utf-8")
+                    skill_text = skill_text.replace("${CLAUDE_PLUGIN_ROOT}/.claude/skills/ui-ux-pro-max", "{SKILL_DIR}")
+                    marker = "## Running the search tool"
+                    skill_text = skill_text.replace(marker, marker + "\n\nFirst resolve `SKILL_DIR` to the absolute directory containing this loaded `SKILL.md`. Use that directory in the examples below.\n")
+                    skill_file.write_text(skill_text, encoding="utf-8")
+                _reject_linked_tree(stage)
+                _ensure_no_alternate_install(plan.id, destination)
+                _safe_destination(destination)
+                stage.rename(destination)
+            finally:
+                shutil.rmtree(stage_parent, ignore_errors=True)
+    except (OSError, ValueError) as exc:
+        return False, f"Installation failed: {exc}. Check for partial changes at {destination}."
+    return True, f"Installed {destination}. Restart Codex to discover the skill."
+
+
+def _impeccable_plan():
+    return _design_skill_plan("impeccable")
+
+
+def _ui_ux_pro_max_plan():
+    return _design_skill_plan("ui_ux_pro_max")
+
+
+def _anti_ui_slop_plan():
+    return _design_skill_plan("anti_ui_slop")
+
+
 def _install_cli(plan: SuggestedInstallPlan) -> tuple[bool, str]:
     destination = plan.destination
     assert destination is not None
@@ -401,6 +548,12 @@ SUGGESTED_ITEMS = (
                   _last30_plan, _install_last30),
     SuggestedItem("cli_anything", "CLI-Anything Codex generator skill", "Generates agentic harnesses for graphical applications.", CLI_ANYTHING_URL,
                   _cli_plan, _install_cli),
+    SuggestedItem("impeccable", "Impeccable UI/UX skill", "Design critique, accessibility audits, and UI polish.", IMPECCABLE_URL,
+                  _impeccable_plan, _design_skill_installer),
+    SuggestedItem("ui_ux_pro_max", "UI UX Pro Max design skill", "Searchable design-system guidance for interface work.", UI_UX_PRO_MAX_URL,
+                  _ui_ux_pro_max_plan, _design_skill_installer),
+    SuggestedItem("anti_ui_slop", "Anti UI Slop skill", "Product-specific interface guidance and a UI quality gate.", ANTI_UI_SLOP_URL,
+                  _anti_ui_slop_plan, _design_skill_installer),
 )
 
 

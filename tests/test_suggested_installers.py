@@ -66,6 +66,64 @@ class PinnedInstallerTests(unittest.TestCase):
         self.assertIn(installers.CLI_ANYTHING_COMMIT, plan.confirmation_text)
         self.assertIn("executing its installer with your privileges", plan.confirmation_text)
 
+    def test_ui_skill_plans_include_reviewed_pins_and_copy_only_effects(self):
+        from unittest.mock import patch
+
+        for item_id, commit in (
+            ("impeccable", installers.IMPECCABLE_COMMIT),
+            ("ui_ux_pro_max", installers.UI_UX_PRO_MAX_COMMIT),
+            ("anti_ui_slop", installers.ANTI_UI_SLOP_COMMIT),
+        ):
+            with self.subTest(item_id=item_id), patch.object(installers, "_git_path", return_value="git"), \
+                 patch.object(installers, "_safe_destination", return_value=None), \
+                 patch.object(installers, "_skill_destinations", return_value=()):
+                plan, error = installers._design_skill_plan(item_id)
+
+            self.assertIsNone(error)
+            self.assertIn(commit, plan.confirmation_text)
+            self.assertIn("does not execute", plan.confirmation_text)
+            self.assertIn("ls-tree", " ".join(plan.commands[-2]))
+
+    def test_selected_skill_tree_rejects_symlinks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            checkout = root / "checkout"
+            checkout.mkdir()
+            self.git("init", str(checkout))
+            self.git("-C", str(checkout), "config", "user.email", "test@example.invalid")
+            self.git("-C", str(checkout), "config", "user.name", "Test")
+            (checkout / "skill").mkdir()
+            (checkout / "skill" / "SKILL.md").write_text("skill\n", encoding="utf-8")
+            link_blob = self.git("-C", str(checkout), "hash-object", "-w", "--stdin", cwd=None)
+
+            self.assertTrue(link_blob)
+            self.git("-C", str(checkout), "add", "skill/SKILL.md")
+            self.git("-C", str(checkout), "update-index", "--add", "--cacheinfo", f"120000,{link_blob},skill/link")
+            self.git("-C", str(checkout), "commit", "-m", "skill")
+            commit = self.git("-C", str(checkout), "rev-parse", "HEAD")
+
+            ok, detail = installers._validate_git_tree("git", checkout, commit, ("skill",))
+
+            self.assertFalse(ok)
+            self.assertIn("symlink", detail)
+
+    def test_selected_skill_status_and_removal_cover_new_ids(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skills"
+            root.mkdir()
+            skill = root / "impeccable"
+            skill.mkdir()
+            (skill / "SKILL.md").write_text("name: impeccable\n", encoding="utf-8")
+            with patch.object(installers, "_skill_roots", return_value=(root,)), \
+                 patch.object(installers.shutil, "which", return_value=None):
+                self.assertEqual(installers.suggested_status()["impeccable"], (skill,))
+                plan, error = installers.plan_removal("impeccable")
+
+            self.assertIsNone(error)
+            self.assertEqual(plan.destinations[0][0], skill)
+
     def test_rtk_absent_status_explains_manual_only_installation(self):
         from unittest.mock import Mock, patch
         import install_gui

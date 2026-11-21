@@ -13,7 +13,7 @@ git clone https://github.com/sarpce/getonmylevel.git
 cd getonmylevel
 ```
 
-Each skill is independent. Its `agents/openai.yaml` disables implicit invocation, so select the skill through the optional session convention or invoke it explicitly. None of the installer tools modifies global instructions or Codex settings.
+Each skill is independent. Its `agents/openai.yaml` disables implicit invocation, so select the skill through the optional session convention or invoke it explicitly. Skill installation does not modify global instructions or Codex settings.
 
 ## Install skills
 
@@ -26,6 +26,16 @@ python tools/install_gui.py
 Select one or more skills and a scope: **User-wide**, **Target repository**, or **Both**. For repository scope, choose an existing target repository. The preview shows whether each skill will be installed or updated. The installer uses the skill files in this checkout; it does not download a release. After confirmation, an existing skill directory is replaced with the checked-out version, and its previous contents (including local edits) are kept under `getonmylevel-backups` beside the skills directory. Existing files, symlinks, junctions, and other detected reparse points are refused as skill destinations, as are linked or invalid managed paths. An I/O error during a multi-skill operation can leave earlier completed copies in place; the tool reports completed changes and backup paths.
 
 User-wide skills go to `$HOME/.agents/skills`. Repository skills go to `<target-repository>/.agents/skills` and may be tracked by that repository. Installing in both places may cause duplicate discovery; usually choose one. The built-in `$skill-installer` uses `$CODEX_HOME/skills`; locations may differ by client. Follow current [Codex skills documentation](https://developers.openai.com/codex/skills). Restart Codex if a new skill is not discovered.
+
+### Suggested skillsets and tools
+
+The GUI includes an unchecked-by-default **Suggested skillsets and tools** section with independent choices for [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), and [CLI-Anything](https://github.com/HKUDS/CLI-Anything). These are user-wide installations and are separate from the bundled skill scope controls. All selected items are preflighted before confirmation; if any selected item cannot be prepared, none are installed. After confirmation, each selected installer runs in sequence, continues after individual failures, and reports each result. A failed upstream installer can leave partial changes, which are reported.
+
+Last 30 Days requires Git and installs the complete upstream `skills/last30days` directory to `~/.agents/skills/last30days`. CLI-Anything requires Git plus PowerShell on Windows or Bash on macOS/Linux. It runs the upstream Codex skill installer, which installs the generator skill and its supporting resources to `$CODEX_HOME/skills/cli-anything` or `~/.codex/skills/cli-anything`; it does not install all application harnesses. Both clone the current upstream default branch, which is not pinned, and refuse to overwrite an existing destination. Last 30 Days files are copied without executing their code. CLI-Anything executes the upstream installer with your user privileges.
+
+RTK is a standalone command-output optimizer. Windows uses Winget to install the full `rtk-ai.rtk` edition, with Apache-2.0 and BUSL-1.1 components; proceeding accepts Winget's source and package agreements. macOS/Linux use Homebrew's Apache-2.0 `rtk-oss` edition, which has command filters but not the RTK pipeline engine. Homebrew runs in noninteractive mode. The installer refuses to proceed if an `rtk` executable is already on PATH because it may be an unrelated tool. RTK package installation does not activate it or configure Codex. Review [RTK setup instructions](https://github.com/rtk-ai/rtk) separately before running `rtk init -g --codex`, which can change global Codex configuration. Open a new terminal if PATH has not refreshed; verify with `rtk --version` and `rtk gain`. Use the [RTK installation guide](https://www.rtk-ai.app/docs/getting-started/installation/) if a package manager is unavailable.
+
+The confirmation shows planned commands/actions, destinations, prerequisites, network activity, and execution effects. Canceling makes no changes. The clone and installer commands use argument arrays without shell interpretation. Restart Codex after installing skills if they are not discovered.
 
 ### Terminal fallback
 

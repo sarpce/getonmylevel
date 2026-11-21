@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import queue
+import threading
 import webbrowser
 try:
     import tkinter as tk
@@ -12,6 +14,7 @@ except ImportError as exc:
     raise SystemExit(0)
 
 import common
+import suggested_installers
 
 
 SOURCE_ROOT = Path(__file__).resolve().parent.parent / "skills"
@@ -22,8 +25,8 @@ class Installer:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         root.title("getonmylevel skill installer")
-        root.geometry("760x690")
-        root.minsize(620, 560)
+        root.geometry("800x820")
+        root.minsize(660, 700)
 
         outer = ttk.Frame(root, padding=14)
         outer.pack(fill="both", expand=True)
@@ -48,6 +51,21 @@ class Installer:
         ttk.Entry(repo_row, textvariable=self.repo_path).pack(side="left", fill="x", expand=True, padx=8)
         ttk.Button(repo_row, text="Browse…", command=self.browse_repo).pack(side="left")
 
+        suggested_box = ttk.LabelFrame(outer, text="Suggested skillsets and tools", padding=8)
+        suggested_box.pack(fill="x", pady=(10, 0))
+        ttk.Label(suggested_box, text="Optional user-wide installs. Select any combination; all selected items are reviewed before installation.",
+                  wraplength=700).pack(anchor="w")
+        self.suggested_selected = {item.id: tk.BooleanVar(value=False) for item in suggested_installers.SUGGESTED_ITEMS}
+        self.suggested_checks = []
+        for item in suggested_installers.SUGGESTED_ITEMS:
+            check = ttk.Checkbutton(suggested_box, text=f"{item.name} — {item.description}",
+                                    variable=self.suggested_selected[item.id])
+            check.pack(anchor="w")
+            self.suggested_checks.append(check)
+        self.suggested_button = ttk.Button(suggested_box, text="Install selected suggestions…",
+                                           command=self.install_suggestions)
+        self.suggested_button.pack(anchor="e", pady=(4, 0))
+
         ttk.Label(outer, text="Preview").pack(anchor="w", pady=(12, 4))
         self.preview = tk.Text(outer, height=9, wrap="word", state="disabled")
         self.preview.pack(fill="both", expand=True)
@@ -55,9 +73,104 @@ class Installer:
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Install or update selected skills", command=self.install).pack(side="right")
-        ttk.Button(buttons, text="Close", command=root.destroy).pack(side="right", padx=(0, 8))
+        self.skill_button = ttk.Button(buttons, text="Install or update selected skills", command=self.install)
+        self.skill_button.pack(side="right")
+        self.close_button = ttk.Button(buttons, text="Close", command=self.close)
+        self.close_button.pack(side="right", padx=(0, 8))
+        self.suggested_busy = False
+        self.suggested_confirming = False
+        self.suggested_queue = queue.Queue()
+        root.protocol("WM_DELETE_WINDOW", self.close)
         self.scope_changed()
+
+    def close(self) -> None:
+        if self.suggested_busy or self.suggested_confirming:
+            messagebox.showinfo("Installation in progress", "Finish or cancel the suggested installation before closing.")
+            return
+        self.root.destroy()
+
+    def install_suggestions(self) -> None:
+        if self.suggested_busy or self.suggested_confirming:
+            return
+        selected = [item_id for item_id, variable in self.suggested_selected.items() if variable.get()]
+        plans, error = suggested_installers.plan_selected(selected)
+        if error:
+            messagebox.showwarning("Suggested items unavailable", error)
+            return
+        assert plans is not None
+        confirmation = "Install these suggested items for the current user?\n\n"
+        confirmation += "\n\n".join(plan.confirmation_text for plan in plans)
+        confirmation += ("\n\nUpstream default branches are not pinned. Selected installers may download files or execute upstream code with your privileges. "
+                         "Canceling makes no changes.")
+        self.suggested_confirming = True
+        self.suggested_button.configure(state="disabled")
+        self.skill_button.configure(state="disabled")
+        try:
+            confirmed = messagebox.askyesno("Confirm suggested installations", confirmation)
+        except tk.TclError as exc:
+            self.suggested_button.configure(state="normal")
+            self.skill_button.configure(state="normal")
+            messagebox.showerror("Confirmation unavailable", f"Could not show the confirmation dialog: {exc}")
+            return
+        finally:
+            self.suggested_confirming = False
+        if not confirmed:
+            self.suggested_button.configure(state="normal")
+            self.skill_button.configure(state="normal")
+            return
+        self.start_suggested_install(plans)
+
+    def start_suggested_install(self, plans: list[suggested_installers.SuggestedInstallPlan]) -> None:
+        self.suggested_busy = True
+        self.skill_button.configure(state="disabled")
+        self.close_button.configure(state="disabled")
+        self.suggested_button.configure(state="disabled")
+        for check in self.suggested_checks:
+            check.configure(state="disabled")
+        self.suggested_status = tk.Toplevel(self.root)
+        self.suggested_status.title("Installing suggested items")
+        self.suggested_status.transient(self.root)
+        self.suggested_status.protocol("WM_DELETE_WINDOW", lambda: None)
+        ttk.Label(self.suggested_status, text="Installing selected suggestions. The interface remains available while installers run.",
+                  padding=16, wraplength=420).pack()
+
+        def worker() -> None:
+            try:
+                result = suggested_installers.install_selected(plans)
+            except Exception as exc:
+                result = [("Suggested installations", False, f"Worker failed; partial changes may remain: {exc}")]
+            self.suggested_queue.put(result)
+
+        try:
+            threading.Thread(target=worker, daemon=True).start()
+        except (RuntimeError, OSError) as exc:
+            self.finish_suggested_install()
+            self.suggested_status.destroy()
+            messagebox.showerror("Installation could not start", f"Could not start the installation worker: {exc}")
+            return
+        self.root.after(100, self.poll_suggested_result)
+
+    def finish_suggested_install(self) -> None:
+        self.suggested_busy = False
+        self.skill_button.configure(state="normal")
+        self.close_button.configure(state="normal")
+        self.suggested_button.configure(state="normal")
+        for check in self.suggested_checks:
+            check.configure(state="normal")
+
+    def poll_suggested_result(self) -> None:
+        try:
+            results = self.suggested_queue.get_nowait()
+        except queue.Empty:
+            self.root.after(100, self.poll_suggested_result)
+            return
+        self.suggested_status.destroy()
+        self.finish_suggested_install()
+        sections = [f"{'Installed' if success else 'Failed'}: {name}\n{detail}" for name, success, detail in results]
+        has_failures = any(not success for _, success, _ in results)
+        title = "Suggested installations completed with issues" if has_failures else "Suggested installations complete"
+        message = "\n\n".join(sections)
+        (messagebox.showwarning if has_failures else messagebox.showinfo)(title, message)
 
     def scope_changed(self) -> None:
         self.refresh_preview()

@@ -1,6 +1,6 @@
 # getonmylevel
 
-Three independently installable Codex skills for communication, project context, and software engineering, plus optional role-agent templates and local setup tools.
+Four independently installable Codex skills for communication, project context, software engineering, and interface design, plus optional role-agent templates and local setup tools.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ git clone https://github.com/sarpce/getonmylevel.git
 cd getonmylevel
 ```
 
-Each skill is independent. Its `agents/openai.yaml` disables implicit invocation, so select the skill through the optional session convention or invoke it explicitly. Skill installation does not modify global instructions or Codex settings.
+Each skill is independent. The communication, context, and engineering skills disable implicit invocation, so select them through the optional session convention or invoke them explicitly. The design skill uses normal automatic discovery. Installed client behavior and higher-priority instructions govern actual activation. Skill installation does not modify global instructions or Codex settings.
 
 ## Install skills
 
@@ -45,8 +45,8 @@ PowerShell:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$allowedNames = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering')
-$names = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering')
+$allowedNames = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering', 'getonmylevel-design')
+$names = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering', 'getonmylevel-design')
 $scopes = @('user') # 'repo' or @('user', 'repo') are also supported
 $targetRepo = 'C:\path\to\target-repository'
 if ($names.Count -eq 0) { throw 'Select at least one skill.' }
@@ -96,10 +96,10 @@ POSIX shell:
 
 ```sh
 set -e
-names='getonmylevel-communication getonmylevel-context getonmylevel-engineering'
+names='getonmylevel-communication getonmylevel-context getonmylevel-engineering getonmylevel-design'
 scopes='user' # 'repo' or 'user repo' are also supported
 target_repo='/path/to/target-repository'
-allowed_names=' getonmylevel-communication getonmylevel-context getonmylevel-engineering '
+allowed_names=' getonmylevel-communication getonmylevel-context getonmylevel-engineering getonmylevel-design '
 allowed_scopes=' user repo '
 [ -n "$names" ] || { printf 'Select at least one skill.\n' >&2; exit 1; }
 seen=' '
@@ -167,9 +167,9 @@ To update a manual install, review the repository changes and replace only the s
 
 ## Session selection
 
-The optional selector instruction in [`optional/global-session-selector.md`](optional/global-session-selector.md) supports **On**, **Off**, and **Ask** preferences for the three skills. It also states that Simple/Agent-based development choice is independent of skill selection. Merge it manually with your effective global instructions; it does not edit or override them. These are conversation conventions, not enforced Codex settings. The GUI can copy a generated instruction block without changing any file.
+The optional selector instruction in [`optional/global-session-selector.md`](optional/global-session-selector.md) supports **On**, **Off**, and **Ask** preferences for the four skills. It also states that Simple/Agent-based development choice is independent of skill selection. Merge it manually with your effective global instructions; it does not edit or override them. These are conversation conventions, not enforced Codex settings. The GUI can copy a generated instruction block without changing any file.
 
-Explicit skill invocation uses `$getonmylevel-communication`, `$getonmylevel-context`, or `$getonmylevel-engineering`. Higher-priority instructions and available tools always constrain activation.
+Explicit skill invocation uses `$getonmylevel-communication`, `$getonmylevel-context`, `$getonmylevel-engineering`, or `$getonmylevel-design`. Higher-priority instructions and available tools always constrain activation; the installed client determines whether a skill is discovered and invoked.
 
 ## Optional agent roles
 

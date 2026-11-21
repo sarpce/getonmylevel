@@ -1,16 +1,25 @@
 # getonmylevel
 
-**Practical Codex skills and agent roles, installed from one small desktop app.**
+**Practical Codex skills and optional agent roles. Install from one desktop app.**
 
-[Skills](#skills) · [Install](#install) · [License](#license)
+Six skills for communication, context, engineering, design, software practices, and skill discovery. Choose what you need.
 
 ## Skills
 
-Six optional skills for communication, context, engineering, interface design, software practices, and skill discovery. Add the designer, implementer, reviewer, and tester agent roles when you need them.
+| Skill | Purpose |
+| --- | --- |
+| [Communication](skills/getonmylevel-communication/SKILL.md) | Clear, concise answers. |
+| [Context](skills/getonmylevel-context/SKILL.md) | Find relevant project context efficiently. |
+| [Engineering](skills/getonmylevel-engineering/SKILL.md) | Guide software work; choose Simple or Agent-based workflow. |
+| [Design](skills/getonmylevel-design/SKILL.md) | Design deliberate, usable interfaces. |
+| [Good software engineering practices](skills/getonmylevel-good-software-engineering-practices/SKILL.md) | Keep software changes correct, secure, and maintainable. |
+| [Skill discovery](skills/getonmylevel-skill-discovery/SKILL.md) | Find useful available skills for each task. |
+
+Optional **designer, implementer, reviewer, and tester** agent templates give Codex separate roles. Skills are instructions, not magic switches: actual behavior depends on client support, available tools, and higher-priority instructions.
 
 ## Install
 
-Requires Python 3.11+ with Tkinter. Clone the repo, then run:
+Requires Git, Python 3.11+ with Tkinter, and a Codex client supporting local skills and custom agents. GUI works on Windows, macOS, and Linux when Tk and a display are available.
 
 ```sh
 git clone https://github.com/sarpce/getonmylevel.git
@@ -18,9 +27,40 @@ cd getonmylevel
 python tools/install_gui.py
 ```
 
-The app has **Skills & installation** and **Agents** tabs. Choose a user or repository scope, review the preview, and confirm changes. Run `python tools/agents_gui.py` to open the same app directly on the existing command path.
+1. In **Skills & installation**, choose skills and **User-wide**, **Target repository**, or **Both**. For repository scope, choose an existing repository.
+2. Read preview. Confirm to install the versions in this checkout and add managed default-use instructions to the applicable `AGENTS.md` (or existing nonempty `AGENTS.override.md`). Existing surrounding instructions stay.
+3. In **Agents**, optionally choose roles, scope, and model settings. Review and confirm those changes separately.
+4. Start a new Codex conversation to load changed instructions. Restart Codex if new skills or the CodeGraph MCP server are not discovered.
 
-Skill installation copies the checked-out files and adds managed default-use guidance to the applicable `AGENTS.md`. Agent setup writes selected role templates. Both tools show planned changes before applying them. The full install behavior, destinations, backups, optional tools, and terminal fallback are in [INSTALL.md](INSTALL.md).
+Already have a skill installed? GUI updates it and keeps the old directory in a `getonmylevel-backups` folder beside the skills directory. A failed multi-skill operation can leave earlier changes in place; read the result. To open the same app through the agent entry point, run `python tools/agents_gui.py`.
+
+## Use skills and agents
+
+The installer asks Codex to read selected skills by default when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering` or `$getonmylevel-design`. Your instructions and higher-priority rules still apply.
+
+For an interactive software change, the engineering skill offers **Simple** or **Agent-based** and waits for your choice. Simple means the main agent works directly. Agent-based uses a designer and then an implementer; independent review and testing are separate choices. Delegation and checks still need to be allowed by the active session. Configure the optional roles in the Agents tab before using them.
+
+The Agents tab can also copy an optional On/Off/Ask session preference block. It does not write that block to a file; merge it into your instructions yourself if wanted. See [session selector](optional/global-session-selector.md) for its scope.
+
+## Where things go
+
+- User-wide skills: `~/.agents/skills`. Instructions: `$CODEX_HOME/AGENTS.md`, or `~/.codex/AGENTS.md` when `CODEX_HOME` is unset.
+- Repository skills: `<target-repository>/.agents/skills`. Instructions: the target repository's `AGENTS.md`.
+- Agent roles: `$CODEX_HOME/agents` (or `~/.codex/agents`) for user scope; `<target-repository>/.codex/agents` for repository scope.
+
+A nonempty `AGENTS.override.md` takes precedence over `AGENTS.md` in the applicable location. Installing skills in both scopes can cause duplicate discovery; usually choose one. The Agents tab writes role templates, not Codex configuration or `AGENTS.md`.
+
+To remove the managed default-use instructions, choose the scope and use **Remove getonmylevel instructions** in the GUI. This leaves skill files in place. To remove a skill itself, delete only its own `getonmylevel-*` directory. Deselecting a skill during a later install does not remove it or its managed instruction.
+
+## Extra tools
+
+Selecting the context skill also selects **CodeGraph** for user-wide installation and global Codex setup. If missing, it needs Node.js and npm. Setup may download packages and change Codex MCP configuration and managed instructions. It does not initialize or index any project; that is a separate choice. CodeGraph can also be selected on its own.
+
+The GUI offers optional [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), and [CLI-Anything](https://github.com/HKUDS/CLI-Anything). They are unchecked by default. Review each confirmation: external installs may download files or run upstream code, and upstream branches are not pinned. RTK is installed separately from its Codex activation. The GUI can remove detected Last 30 Days and CLI-Anything skill directories; remove RTK with its package manager.
+
+## More details
+
+[INSTALL.md](INSTALL.md) has detailed destinations, update and removal behavior, optional tool prerequisites, troubleshooting, and a terminal fallback when Tkinter is unavailable. The terminal fallback installs new skill copies only; it does not add instructions or install CodeGraph.
 
 ## License
 

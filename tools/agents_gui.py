@@ -288,20 +288,23 @@ def write_atomic(path: Path, content: str) -> None:
 
 
 class AgentConfigurator:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, parent=None, close_command=None, configure_window: bool = True) -> None:
         self.root = root
-        root.title("getonmylevel agent configuration")
-        root.geometry("980x790")
-        root.minsize(760, 620)
+        if configure_window:
+            root.title("getonmylevel · Skills and agents")
+            root.geometry("1000x780")
+            root.minsize(760, 620)
         self.templates = load_templates()
         self.model_choices: dict[str, list[str]] = {}
         self.refresh_queue: queue.Queue[tuple[bool, Any]] = queue.Queue()
         self.scope_conflicts: dict[str, list[tuple[str, str]]] = {}
 
-        outer = ttk.Frame(root, padding=14)
+        outer = ttk.Frame(parent or root, padding=18)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Optional Codex agent roles", font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
-        ttk.Label(outer, text="Configure only selected role files. Existing getonmylevel-managed model/effort values are loaded for editing.", wraplength=920).pack(anchor="w", pady=(4, 10))
+        ttk.Label(outer, text="Agent roles", font=("Segoe UI", 20, "bold")).pack(anchor="w")
+        self.intro_label = ttk.Label(outer, text="Add focused helpers to Codex. Choose a role, then set its model and reasoning effort.",
+                                     style="Muted.TLabel", wraplength=900)
+        self.intro_label.pack(anchor="w", pady=(5, 16))
 
         selector_row = ttk.Frame(outer)
         selector_row.pack(fill="x", pady=(0, 8))
@@ -309,7 +312,8 @@ class AgentConfigurator:
         self.preference = tk.StringVar(value="Ask")
         ttk.Combobox(selector_row, textvariable=self.preference, values=("On", "Off", "Ask"), state="readonly", width=8).pack(side="left", padx=8)
         ttk.Button(selector_row, text="Copy session instruction block", command=self.copy_selector).pack(side="left")
-        ttk.Label(selector_row, text="Copy only; this tool does not edit global instructions.").pack(side="left", padx=8)
+        ttk.Label(outer, text="Copies a block to the clipboard; global instructions are left unchanged.",
+                  style="Muted.TLabel").pack(anchor="w", pady=(0, 8))
 
         scope_row = ttk.Frame(outer)
         scope_row.pack(fill="x")
@@ -318,53 +322,115 @@ class AgentConfigurator:
         for label, value in (("Global user", "global"), ("Repository", "repo"), ("Both", "both")):
             ttk.Radiobutton(scope_row, text=label, value=value, variable=self.scope, command=self.scope_changed).pack(side="left", padx=6)
         self.repo_path = tk.StringVar()
-        ttk.Entry(outer, textvariable=self.repo_path).pack(fill="x", pady=(6, 4))
-        ttk.Button(outer, text="Choose target repository…", command=self.browse_repo).pack(anchor="e")
+        repo_row = ttk.Frame(outer)
+        repo_row.pack(fill="x", pady=(8, 0))
+        ttk.Entry(repo_row, textvariable=self.repo_path).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ttk.Button(repo_row, text="Browse…", command=self.browse_repo).pack(side="left")
 
-        row = ttk.Frame(outer)
-        row.pack(fill="x", pady=(10, 4))
-        ttk.Label(row, text="Role", width=18).pack(side="left")
-        ttk.Label(row, text="Model (blank inherits Codex default)", width=38).pack(side="left")
-        ttk.Label(row, text="Reasoning effort", width=20).pack(side="left")
+        ttk.Label(outer, text="Available roles", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(16, 8))
+        self.role_grid = ttk.Frame(outer)
+        self.role_grid.pack(fill="x")
         self.enabled: dict[str, tk.BooleanVar] = {}
         self.model_vars: dict[str, tk.StringVar] = {}
         self.effort_vars: dict[str, tk.StringVar] = {}
         self.model_widgets: dict[str, ttk.Combobox] = {}
         self.effort_widgets: dict[str, ttk.Combobox] = {}
+        self.role_cards = {}
+        self.role_card_bodies = {}
+        self.role_card_title_rows = {}
+        self.role_card_markers = {}
+        self.role_card_checks = {}
+        self.role_card_descriptions = {}
         for role in common.AGENT_NAMES:
-            role_row = ttk.Frame(outer)
-            role_row.pack(fill="x", pady=3)
+            card = tk.Frame(self.role_grid, background="#FFFFFF", highlightthickness=1,
+                            highlightbackground="#D4D4D8", highlightcolor="#059669")
+            body = ttk.Frame(card, style="Card.TFrame", padding=12)
+            body.pack(fill="both", expand=True)
             self.enabled[role] = tk.BooleanVar(value=False)
             self.model_vars[role] = tk.StringVar()
             self.effort_vars[role] = tk.StringVar()
-            ttk.Checkbutton(role_row, text=role.title(), variable=self.enabled[role], command=self.refresh_preview, width=16).pack(side="left")
-            model = ttk.Combobox(role_row, textvariable=self.model_vars[role], values=("",), width=42)
-            model.pack(side="left", fill="x", expand=True, padx=(0, 8))
+            title_row = ttk.Frame(body, style="Card.TFrame")
+            title_row.pack(fill="x")
+            marker = ttk.Label(title_row, text="○", style="CardMarker.TLabel", width=2, anchor="center")
+            marker.pack(side="left", padx=(0, 4))
+            check = ttk.Checkbutton(title_row, text=role.title(), variable=self.enabled[role], command=self.refresh_preview,
+                                    style="Card.TCheckbutton")
+            check.pack(side="left", anchor="w", fill="x", expand=True)
+            description = ttk.Label(body, text=self.templates[role]["description"], style="CardMuted.TLabel",
+                                    wraplength=280, justify="left")
+            description.pack(anchor="w", fill="x", pady=(4, 10))
+            ttk.Label(body, text="Model · blank uses Codex default", style="CardMuted.TLabel").pack(anchor="w")
+            model = ttk.Combobox(body, textvariable=self.model_vars[role], values=("",), width=24)
+            model.pack(fill="x", pady=(3, 8))
             model.bind("<<ComboboxSelected>>", lambda _event, selected_role=role: self.model_changed(selected_role))
             model.bind("<FocusOut>", lambda _event, selected_role=role: self.refresh_preview())
             self.model_widgets[role] = model
-            effort = ttk.Combobox(role_row, textvariable=self.effort_vars[role], values=("",), width=18)
-            effort.pack(side="left")
+            ttk.Label(body, text="Reasoning effort · blank uses default", style="CardMuted.TLabel").pack(anchor="w")
+            effort = ttk.Combobox(body, textvariable=self.effort_vars[role], values=("",), width=14)
+            effort.pack(anchor="w", fill="x", pady=(3, 0))
             effort.bind("<<ComboboxSelected>>", lambda _event: self.refresh_preview())
             effort.bind("<FocusOut>", lambda _event: self.refresh_preview())
             self.effort_widgets[role] = effort
+            self.role_cards[role] = card
+            self.role_card_bodies[role] = body
+            self.role_card_title_rows[role] = title_row
+            self.role_card_markers[role] = marker
+            self.role_card_checks[role] = check
+            self.role_card_descriptions[role] = description
+            self.enabled[role].trace_add("write", lambda *_args, selected_role=role: self.update_role_card(selected_role))
+            self.update_role_card(role)
+        self.role_grid.bind("<Configure>", self.reflow_role_cards)
 
         control_row = ttk.Frame(outer)
         control_row.pack(fill="x", pady=8)
         self.refresh_button = ttk.Button(control_row, text="Refresh available models from Codex...", command=self.refresh_models)
-        self.refresh_button.pack(side="left")
+        self.refresh_button.pack(anchor="w")
         self.refresh_status = tk.StringVar(value="Model discovery is optional. You can enter values manually.")
-        ttk.Label(control_row, textvariable=self.refresh_status, wraplength=620).pack(side="left", padx=10)
+        ttk.Label(control_row, textvariable=self.refresh_status, style="Muted.TLabel", wraplength=620).pack(anchor="w", pady=(5, 0))
 
         ttk.Label(outer, text="Preview").pack(anchor="w", pady=(4, 4))
-        self.preview = tk.Text(outer, height=12, wrap="word", state="disabled")
+        self.preview = tk.Text(outer, height=12, wrap="word", state="disabled", borderwidth=1,
+                               highlightthickness=1, highlightbackground="#D4D4D8", highlightcolor="#059669",
+                               padx=10, pady=8)
         self.preview.pack(fill="both", expand=True)
         button_row = ttk.Frame(outer)
         button_row.pack(fill="x", pady=(10, 0))
-        ttk.Button(button_row, text="Write selected agent files…", command=self.write_selected).pack(side="right")
-        ttk.Button(button_row, text="Close", command=root.destroy).pack(side="right", padx=(0, 8))
+        ttk.Button(button_row, text="Write selected agent files…", command=self.write_selected,
+                   style="Primary.TButton").pack(side="right")
+        ttk.Button(button_row, text="Close", command=close_command or root.destroy).pack(side="right", padx=(0, 8))
         self.scope_changed()
         self.poll_refresh()
+        outer.bind("<Configure>", self.fit_page_copy)
+
+    def fit_page_copy(self, event) -> None:
+        self.intro_label.configure(wraplength=max(240, event.width - 36))
+
+    def update_role_card(self, role: str) -> None:
+        selected = self.enabled[role].get()
+        self.role_cards[role].configure(highlightbackground="#D4D4D8")
+        self.role_card_bodies[role].configure(style="Selected.Card.TFrame" if selected else "Card.TFrame")
+        self.role_card_title_rows[role].configure(style="Selected.Card.TFrame" if selected else "Card.TFrame")
+        self.role_card_descriptions[role].configure(style="Selected.CardMuted.TLabel" if selected else "CardMuted.TLabel")
+        self.role_card_markers[role].configure(text="✓" if selected else "○",
+                                               style="Selected.CardMarker.TLabel" if selected else "CardMarker.TLabel")
+        self.role_card_checks[role].configure(style="Selected.Card.TCheckbutton" if selected else "Card.TCheckbutton")
+
+    def reflow_role_cards(self, event=None) -> None:
+        width = event.width if event is not None else self.role_grid.winfo_width()
+        columns = 2 if width >= 500 else 1
+        for card in self.role_cards.values():
+            card.grid_forget()
+        for column in range(2):
+            self.role_grid.columnconfigure(column, weight=0, minsize=0, uniform="")
+        for column in range(columns):
+            self.role_grid.columnconfigure(column, weight=1, uniform="role-card")
+        for index, role in enumerate(self.role_cards):
+            card = self.role_cards[role]
+            card.grid(row=index // columns, column=index % columns, sticky="nsew",
+                      padx=(0 if index % columns == 0 else 6, 6 if index % columns < columns - 1 else 0),
+                      pady=(0, 12))
+            card_width = max(220, (width - 12 * (columns - 1)) // columns)
+            self.role_card_descriptions[role].configure(wraplength=max(190, card_width - 36))
 
     def browse_repo(self) -> None:
         chosen = filedialog.askdirectory(title="Choose an existing target repository")
@@ -535,18 +601,8 @@ class AgentConfigurator:
 
 
 def main() -> None:
-    try:
-        root = tk.Tk()
-    except tk.TclError as exc:
-        print(f"Tkinter could not open a window ({exc}). Use the terminal or edit the TOML templates manually ({TEMPLATE_ROOT}).")
-        return
-    try:
-        AgentConfigurator(root)
-    except (OSError, ValueError, UnicodeError, tomllib.TOMLDecodeError) as exc:
-        messagebox.showerror("Unable to load agent templates", str(exc))
-        root.destroy()
-        return
-    root.mainloop()
+    from gui import main as launch
+    launch()
 
 
 if __name__ == "__main__":

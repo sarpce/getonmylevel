@@ -21,6 +21,15 @@ import suggested_installers
 SOURCE_ROOT = Path(__file__).resolve().parent.parent / "skills"
 SOURCE_REPO = SOURCE_ROOT.parent.resolve()
 
+SKILL_DESCRIPTIONS = {
+    "getonmylevel-communication": ("Communication", "Clear, concise answers that keep context and actionable detail."),
+    "getonmylevel-context": ("Project context", "Find relevant code efficiently and maintain useful local architecture notes."),
+    "getonmylevel-engineering": ("Engineering workflow", "Pragmatic practices for design, implementation, testing, and review."),
+    "getonmylevel-design": ("Interface design", "Create deliberate, accessible interfaces with a coherent visual system."),
+    "getonmylevel-good-software-engineering-practices": ("Software practices", "Build reliable, maintainable changes that fit the existing project."),
+    "getonmylevel-skill-discovery": ("Skill discovery", "Find and apply available skills when they can help with the task."),
+}
+
 
 def perform_install(copies, instruction_plans):
     """Copy skills before writing their default-use instructions."""
@@ -30,32 +39,75 @@ def perform_install(copies, instruction_plans):
 
 
 class Installer:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, parent=None, configure_window: bool = True) -> None:
         self.root = root
-        root.title("getonmylevel skill installer")
-        root.geometry("800x820")
-        root.minsize(660, 700)
+        if configure_window:
+            root.title("getonmylevel · Skills and agents")
+            root.geometry("1000x780")
+            root.minsize(760, 620)
 
-        outer = ttk.Frame(root, padding=14)
+        outer = ttk.Frame(parent or root, padding=18)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Install or update getonmylevel skills", font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
-        ttk.Label(outer, text="Choose skills and where to install them, or remove getonmylevel-managed instructions. Changes require confirmation.").pack(anchor="w", pady=(4, 12))
+        ttk.Label(outer, text="Skills for Codex", font=("Segoe UI", 20, "bold")).pack(anchor="w")
+        self.intro_label = ttk.Label(outer, text="Choose the capabilities you want to add. Review every destination before applying changes.",
+                                     style="Muted.TLabel", wraplength=900)
+        self.intro_label.pack(anchor="w", pady=(5, 16))
 
-        skills_box = ttk.LabelFrame(outer, text="Core skills", padding=10)
-        skills_box.pack(fill="x")
+        ttk.Label(outer, text="Core skills", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 8))
+        self.skills_grid = ttk.Frame(outer)
+        self.skills_grid.pack(fill="x")
         self.selected = {name: tk.BooleanVar(value=True) for name in common.SKILL_NAMES}
         self.skill_checks = []
+        self.skill_cards = {}
+        self.skill_card_bodies = {}
+        self.skill_card_title_rows = {}
+        self.skill_card_markers = {}
+        self.skill_card_checkbuttons = {}
+        self.skill_card_descriptions = {}
         for name in common.SKILL_NAMES:
-            check = ttk.Checkbutton(skills_box, text=name, variable=self.selected[name], command=self.refresh_preview)
-            check.pack(anchor="w")
+            title, description = SKILL_DESCRIPTIONS[name]
+            card = tk.Frame(self.skills_grid, background="#FFFFFF", highlightthickness=1,
+                            highlightbackground="#D4D4D8", highlightcolor="#059669")
+            body = ttk.Frame(card, style="Card.TFrame", padding=12)
+            body.pack(fill="both", expand=True)
+            title_row = ttk.Frame(body, style="Card.TFrame")
+            title_row.pack(fill="x")
+            marker = ttk.Label(title_row, text="○", style="CardMarker.TLabel", width=2, anchor="center")
+            marker.pack(side="left", padx=(0, 4))
+            check = ttk.Checkbutton(title_row, text=title, variable=self.selected[name], style="Card.TCheckbutton",
+                                    command=self.refresh_preview)
+            check.pack(side="left", anchor="w", fill="x", expand=True)
+            detail = ttk.Label(body, text=description, style="CardMuted.TLabel", wraplength=260,
+                               justify="left")
+            detail.pack(anchor="w", fill="x", pady=(5, 0))
+            self.skill_cards[name] = card
+            self.skill_card_bodies[name] = body
+            self.skill_card_title_rows[name] = title_row
+            self.skill_card_markers[name] = marker
+            self.skill_card_checkbuttons[name] = check
+            self.skill_card_descriptions[name] = detail
             self.skill_checks.append(check)
+            self.selected[name].trace_add("write", lambda *_args, key=name: self.update_skill_card(key))
+        self.skills_grid.bind("<Configure>", self.reflow_skill_cards)
+
+        codegraph_card = ttk.LabelFrame(outer, text="Optional project context dependency", style="Card.TLabelframe")
+        codegraph_card.pack(fill="x", pady=(12, 0))
         self.codegraph_selected = tk.BooleanVar(value=False)
-        self.codegraph_check = ttk.Checkbutton(skills_box, text="CodeGraph (optional global Codex integration)",
-                                               variable=self.codegraph_selected, command=self.refresh_preview)
-        self.codegraph_check.pack(anchor="w", pady=(5, 0))
+        codegraph_row = ttk.Frame(codegraph_card, style="Card.TFrame")
+        codegraph_row.pack(fill="x")
+        self.codegraph_marker = ttk.Label(codegraph_row, text="○", style="CardMarker.TLabel", width=2, anchor="center")
+        self.codegraph_marker.pack(side="left", padx=(0, 4))
+        self.codegraph_check = ttk.Checkbutton(codegraph_row, text="CodeGraph · global Codex integration",
+                                               variable=self.codegraph_selected, command=self.refresh_preview,
+                                               style="Card.TCheckbutton")
+        self.codegraph_check.pack(side="left", anchor="w")
+        self.codegraph_selected.trace_add("write", self.update_codegraph_marker)
+        self.codegraph_description = ttk.Label(codegraph_card, text="Selected automatically with the project context skill. Installs and configures the global dependency after confirmation.",
+                                               style="CardMuted.TLabel", wraplength=600)
+        self.codegraph_description.pack(anchor="w", padx=(26, 0), pady=(2, 0))
         self.selected["getonmylevel-context"].trace_add("write", self.context_selection_changed)
 
-        scope_box = ttk.LabelFrame(outer, text="Installation scope", padding=10)
+        scope_box = ttk.LabelFrame(outer, text="Install location", padding=10)
         scope_box.pack(fill="x", pady=(10, 0))
         self.scope = tk.StringVar(value="user")
         for label, value in (("User-wide", "user"), ("Target repository", "repo"), ("Both", "both")):
@@ -69,8 +121,9 @@ class Installer:
 
         suggested_box = ttk.LabelFrame(outer, text="Suggested skillsets and tools", padding=8)
         suggested_box.pack(fill="x", pady=(10, 0))
-        ttk.Label(suggested_box, text="Optional user-wide skills and tools. Installed skills can be removed from detected locations; RTK is detected on PATH.",
-                  wraplength=700).pack(anchor="w")
+        self.suggested_description = ttk.Label(suggested_box, text="Optional user-wide skills and tools. Installed items can be removed from detected locations; RTK is detected on PATH.",
+                                               wraplength=600, style="Muted.TLabel")
+        self.suggested_description.pack(anchor="w")
         self.suggested_selected = {item.id: tk.BooleanVar(value=False) for item in suggested_installers.SUGGESTED_ITEMS}
         self.suggested_checks = []
         self.suggested_labels = {}
@@ -88,12 +141,15 @@ class Installer:
         self.suggested_button.pack(anchor="e", pady=(4, 0))
 
         ttk.Label(outer, text="Preview").pack(anchor="w", pady=(12, 4))
-        self.preview = tk.Text(outer, height=9, wrap="word", state="disabled")
+        self.preview = tk.Text(outer, height=9, wrap="word", state="disabled", borderwidth=1,
+                               highlightthickness=1, highlightbackground="#394454", highlightcolor="#68a7ff",
+                               padx=10, pady=8)
         self.preview.pack(fill="both", expand=True)
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         self.skill_button = ttk.Button(buttons, text="Install or update selected skills", command=self.install)
+        self.skill_button.configure(style="Primary.TButton")
         self.skill_button.pack(side="right")
         self.remove_button = ttk.Button(buttons, text="Remove getonmylevel instructions", command=self.remove_instructions)
         self.remove_button.pack(side="right", padx=(0, 8))
@@ -105,8 +161,52 @@ class Installer:
         self.install_queue = queue.Queue()
         self.install_busy = False
         self.refresh_suggested_status()
-        root.protocol("WM_DELETE_WINDOW", self.close)
+        for name in common.SKILL_NAMES:
+            self.update_skill_card(name)
+        outer.bind("<Configure>", self.fit_page_copy)
+        if configure_window:
+            root.protocol("WM_DELETE_WINDOW", self.close)
         self.context_selection_changed()
+
+    def update_skill_card(self, name: str) -> None:
+        card = self.skill_cards[name]
+        selected = self.selected[name].get()
+        card.configure(highlightbackground="#D4D4D8")
+        self.skill_card_bodies[name].configure(style="Selected.Card.TFrame" if selected else "Card.TFrame")
+        self.skill_card_title_rows[name].configure(style="Selected.Card.TFrame" if selected else "Card.TFrame")
+        self.skill_card_descriptions[name].configure(style="Selected.CardMuted.TLabel" if selected else "CardMuted.TLabel")
+        self.skill_card_markers[name].configure(text="✓" if selected else "○",
+                                                style="Selected.CardMarker.TLabel" if selected else "CardMarker.TLabel")
+        self.skill_card_checkbuttons[name].configure(style="Selected.Card.TCheckbutton" if selected else "Card.TCheckbutton")
+        self.refresh_preview()
+
+    def fit_page_copy(self, event) -> None:
+        width = max(240, event.width - 36)
+        self.intro_label.configure(wraplength=width)
+        self.codegraph_description.configure(wraplength=max(220, width - 72))
+        self.suggested_description.configure(wraplength=max(220, width - 24))
+
+    def update_codegraph_marker(self, *_args) -> None:
+        selected = self.codegraph_selected.get()
+        self.codegraph_marker.configure(text="✓" if selected else "○",
+                                        style="Selected.CardMarker.TLabel" if selected else "CardMarker.TLabel")
+
+    def reflow_skill_cards(self, event=None) -> None:
+        width = event.width if event is not None else self.skills_grid.winfo_width()
+        columns = 3 if width >= 740 else 2 if width >= 480 else 1
+        for child in self.skill_cards.values():
+            child.grid_forget()
+        for column in range(3):
+            self.skills_grid.columnconfigure(column, weight=0, minsize=0, uniform="")
+        for column in range(columns):
+            self.skills_grid.columnconfigure(column, weight=1, uniform="skill-card")
+        card_width = max(220, (width - 12 * (columns - 1)) // columns)
+        for index, name in enumerate(self.skill_cards):
+            card = self.skill_cards[name]
+            card.grid(row=index // columns, column=index % columns, sticky="nsew",
+                      padx=(0 if index % columns == 0 else 6, 6 if index % columns < columns - 1 else 0),
+                      pady=(0, 12))
+            self.skill_card_descriptions[name].configure(wraplength=max(180, card_width - 36))
 
     def context_selection_changed(self, *_args) -> None:
         if self.selected["getonmylevel-context"].get():
@@ -476,13 +576,8 @@ class Installer:
 
 
 def main() -> None:
-    try:
-        root = tk.Tk()
-    except tk.TclError as exc:
-        print(f"Tkinter could not open a window ({exc}). Use the terminal installation instructions in README.md.")
-        return
-    Installer(root)
-    root.mainloop()
+    from gui import main as launch
+    launch()
 
 
 if __name__ == "__main__":

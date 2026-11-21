@@ -55,6 +55,23 @@ class InstructionIntegrationTests(unittest.TestCase):
         self.assertEqual(integration.write_instruction_updates(current), [])
         self.assertEqual(current[0].path.read_bytes(), before)
 
+    def test_discovery_skill_adds_instruction_to_existing_block(self):
+        path = self.codex / "AGENTS.md"
+        original = integration._block(SKILLS[:1], "user", "\n")
+        path.write_text("Before\n" + original + "\nAfter\n", encoding="utf-8")
+        plan, = integration.plan_instruction_updates("user", None, ["getonmylevel-skill-discovery"])
+        integration.write_instruction_updates([plan])
+        content = path.read_text(encoding="utf-8")
+        self.assertTrue(content.startswith("Before\n"))
+        self.assertTrue(content.endswith("\nAfter\n"))
+        self.assertIn("review the available skills", content)
+        self.assertIn(".agents/skills", content)
+        self.assertIn(".skills", content)
+        self.assertEqual(integration.plan_instruction_updates("user", None, SKILLS[:1])[0].action, "Already current")
+        removal, = integration.plan_instruction_removals("user", None)
+        integration.write_instruction_removals([removal])
+        self.assertEqual(path.read_text(encoding="utf-8"), "Before\nAfter\n")
+
     def test_preserves_bom_crlf_and_text_around_block(self):
         path = self.codex / "AGENTS.md"
         original = b"\xef\xbb\xbf# Intro\r\nKeep me\r\n"
@@ -171,6 +188,7 @@ class InstructionIntegrationTests(unittest.TestCase):
         installer.scope = Variable("user")
         installer.repo_path = Variable("")
         installer.preview = Preview()
+        installer.install_busy = False
         operation = common.SkillCopy(Path("source"), Path("destination"), None)
         instruction = integration.InstructionUpdate(self.codex / "AGENTS.md", None, b"block", "Create")
         with mock.patch.object(common, "skill_roots", return_value=[self.root / "skills"]), \
@@ -181,7 +199,7 @@ class InstructionIntegrationTests(unittest.TestCase):
         self.assertIn(f"Create: {instruction.path}", installer.preview.value)
         self.assertIn("existing text is preserved", installer.preview.value)
 
-        installer.selections = mock.Mock(return_value=([SKILLS[0]], [], [operation], [instruction]))
+        installer.selections = mock.Mock(return_value=([SKILLS[0]], [], [operation], [instruction], None))
         with mock.patch.object(install_gui.messagebox, "askyesno", return_value=False) as confirm, \
              mock.patch.object(install_gui, "perform_install") as perform:
             installer.install()

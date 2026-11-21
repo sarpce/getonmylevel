@@ -74,6 +74,7 @@ def _block(names: list[str], kind: str, newline: str) -> str:
              "By default, at the start of each conversation, read the following installed skill instructions and follow them as relevant to the task:",
              *[f"- `{path}`" for path in paths],
              "", location_note.rstrip("\n") if location_note else None,
+             ("For each task, review the available skills and relevant skill locations (including `.agents/skills`, `.codex/skills`, and `.skills` where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions." if "getonmylevel-skill-discovery" in names else None),
              "Honor explicit user changes to this preference and higher-priority instructions.", END]
     return newline.join(line for line in lines if line is not None)
 
@@ -142,11 +143,55 @@ def plan_instruction_updates(scope: str, repo_root: Path | None, names: list[str
     return plans
 
 
-def write_instruction_updates(plans: list[InstructionUpdate]) -> list[Path]:
+def _removed_bytes(original: bytes, kind: str) -> bytes:
+    bom = b"\xef\xbb\xbf" if original.startswith(b"\xef\xbb\xbf") else b""
+    try:
+        text = original[len(bom):].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Codex instruction file must be valid UTF-8 to preserve it safely.") from exc
+    newline = "\r\n" if "\r\n" in text else "\n"
+    if _parse_block(text, kind, newline) is None:
+        return original
+    start = text.index(BEGIN)
+    finish = text.index(END) + len(END)
+    # Installation appends a newline after the managed block. Remove that one
+    # as part of the block while retaining all surrounding user text.
+    if text.startswith("\r\n", finish):
+        finish += 2
+    elif text.startswith("\n", finish):
+        finish += 1
+    return bom + (text[:start] + text[finish:]).encode("utf-8")
+
+
+def plan_instruction_removals(scope: str, repo_root: Path | None) -> list[InstructionUpdate]:
+    """Plan removal of managed blocks from every recognized instruction file."""
+    plans: list[InstructionUpdate] = []
+    for kind, root in _instruction_roots(scope, repo_root):
+        # This validates the managed root and both instruction paths for links.
+        _instruction_path(root)
+        for path in (root / "AGENTS.override.md", root / "AGENTS.md"):
+            if common.is_link_or_reparse(path):
+                raise ValueError(f"Refusing linked or reparse-point instruction file: {path}")
+            if not path.exists():
+                continue
+            if not path.is_file():
+                raise ValueError(f"Instruction path is not a regular file: {path}")
+            original = path.read_bytes()
+            proposed = _removed_bytes(original, kind)
+            if proposed != original:
+                plans.append(InstructionUpdate(path, original, proposed, "Remove"))
+    return plans
+
+
+def _write_instruction_plans(plans: list[InstructionUpdate], *, allow_hidden: bool) -> list[Path]:
     written: list[Path] = []
     for plan in plans:
         try:
-            if _instruction_path(plan.path.parent) != plan.path:
+            if allow_hidden:
+                _instruction_path(plan.path.parent)
+                if plan.path.name not in ("AGENTS.md", "AGENTS.override.md"):
+                    raise OSError(f"Not a recognized Codex instruction file: {plan.path}")
+            elif _instruction_path(plan.path.parent) != plan.path:
                 raise OSError(f"The selected Codex instruction file changed since preview: {plan.path}")
             current = plan.path.read_bytes() if plan.path.exists() else None
             if current != plan.original:
@@ -164,7 +209,11 @@ def write_instruction_updates(plans: list[InstructionUpdate]) -> list[Path]:
                     os.fsync(stream.fileno())
                 if mode is not None:
                     os.chmod(temp_path, mode)
-                if _instruction_path(plan.path.parent) != plan.path:
+                if allow_hidden:
+                    _instruction_path(plan.path.parent)
+                    if plan.path.name not in ("AGENTS.md", "AGENTS.override.md"):
+                        raise OSError(f"Not a recognized Codex instruction file: {plan.path}")
+                elif _instruction_path(plan.path.parent) != plan.path:
                     raise OSError(f"The selected Codex instruction file changed since preview: {plan.path}")
                 if common.is_link_or_reparse(plan.path):
                     raise ValueError(f"Refusing linked or reparse-point instruction file: {plan.path}")
@@ -183,3 +232,11 @@ def write_instruction_updates(plans: list[InstructionUpdate]) -> list[Path]:
         except (OSError, ValueError) as exc:
             raise InstructionWriteError(plan.path, written, exc) from exc
     return written
+
+
+def write_instruction_updates(plans: list[InstructionUpdate]) -> list[Path]:
+    return _write_instruction_plans(plans, allow_hidden=False)
+
+
+def write_instruction_removals(plans: list[InstructionUpdate]) -> list[Path]:
+    return _write_instruction_plans(plans, allow_hidden=True)

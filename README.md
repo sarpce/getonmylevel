@@ -1,6 +1,6 @@
 # getonmylevel
 
-Four independently installable Codex skills for communication, project context, software engineering, and interface design, plus optional role-agent templates and local setup tools.
+Five independently installable Codex skills for communication, project context, engineering workflow, interface design, and good software engineering practices, plus optional role-agent templates and local setup tools.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ git clone https://github.com/sarpce/getonmylevel.git
 cd getonmylevel
 ```
 
-Each skill is independent. The installer integrates selected skills into the applicable Codex instruction file by adding a managed block that tells Codex to read them by default when relevant. This is a natural-language preference: instruction precedence, client behavior, file-size limits, and skill availability still govern activation. No Codex settings file is changed.
+The installer integrates selected skills into the applicable Codex instruction file by adding a managed block that tells Codex to read them by default when relevant. This is a natural-language preference: instruction precedence, client behavior, file-size limits, and skill availability still govern activation. Skill installation itself does not change Codex settings. Selecting the context skill also selects CodeGraph as a required installer dependency; CodeGraph remains optional when context is not selected.
 
 ## Install skills
 
@@ -28,6 +28,8 @@ Select one or more skills and a scope: **User-wide**, **Target repository**, or 
 User-wide skills go to `$HOME/.agents/skills`; their managed instructions go in `$CODEX_HOME/AGENTS.md` when `CODEX_HOME` is set, otherwise `~/.codex/AGENTS.md`. Repository skills go to `<target-repository>/.agents/skills`; their instructions go in that repository's `AGENTS.md`. An existing nonempty `AGENTS.override.md` is used in preference to `AGENTS.md`; an empty override is left untouched and `AGENTS.md` is used. If the override later becomes nonempty, it takes precedence. Installing in both places may cause duplicate skill discovery; usually choose one. The built-in `$skill-installer` uses `$CODEX_HOME/skills`; locations may differ by client. Follow current [Codex skills documentation](https://developers.openai.com/codex/skills) and [AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md). Restart Codex if a skill is not discovered, then start a new conversation to load changed instructions.
 
 The managed block preserves surrounding instruction text. Later installs add newly selected skill names to the existing block; deselecting a skill does not remove it. Malformed or manually edited managed blocks are refused for manual repair. To turn off the default preference, remove the exact region beginning `<!-- getonmylevel-skills:begin -->` and ending `<!-- getonmylevel-skills:end -->`; this leaves installed skill directories in place. Instructions are subject to higher-priority guidance and Codex's `project_doc_max_bytes` limit, so a large instruction file may prevent the block from being read.
+
+Selecting **getonmylevel-skill-discovery** also adds an instruction to review available skills and relevant skill locations for each task, and use skills when they can materially help. The GUI labels the bundled choices **Core skills**. Selecting the context skill checks and locks CodeGraph as its dependency. CodeGraph can be selected independently when context is unchecked. If CodeGraph is missing, Node.js and npm are required to install it. Its global Codex setup may download packages and changes Codex MCP configuration and managed instructions. The GUI does not initialize or index a project; indexing is a separate choice. Restart Codex if its MCP server is not available.
 
 ### Suggested skillsets and tools
 
@@ -47,8 +49,8 @@ PowerShell:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$allowedNames = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering', 'getonmylevel-design')
-$names = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering', 'getonmylevel-design')
+$allowedNames = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering', 'getonmylevel-design', 'getonmylevel-good-software-engineering-practices', 'getonmylevel-skill-discovery')
+$names = @('getonmylevel-communication', 'getonmylevel-context', 'getonmylevel-engineering', 'getonmylevel-design', 'getonmylevel-good-software-engineering-practices', 'getonmylevel-skill-discovery')
 $scopes = @('user') # 'repo' or @('user', 'repo') are also supported
 $targetRepo = 'C:\path\to\target-repository'
 if ($names.Count -eq 0) { throw 'Select at least one skill.' }
@@ -98,10 +100,10 @@ POSIX shell:
 
 ```sh
 set -e
-names='getonmylevel-communication getonmylevel-context getonmylevel-engineering getonmylevel-design'
+names='getonmylevel-communication getonmylevel-context getonmylevel-engineering getonmylevel-design getonmylevel-good-software-engineering-practices getonmylevel-skill-discovery'
 scopes='user' # 'repo' or 'user repo' are also supported
 target_repo='/path/to/target-repository'
-allowed_names=' getonmylevel-communication getonmylevel-context getonmylevel-engineering getonmylevel-design '
+allowed_names=' getonmylevel-communication getonmylevel-context getonmylevel-engineering getonmylevel-design getonmylevel-good-software-engineering-practices getonmylevel-skill-discovery '
 allowed_scopes=' user repo '
 [ -n "$names" ] || { printf 'Select at least one skill.\n' >&2; exit 1; }
 seen=' '
@@ -169,9 +171,9 @@ To update a manual install, review the repository changes and replace only the s
 
 ## Session selection
 
-The optional selector instruction in [`optional/global-session-selector.md`](optional/global-session-selector.md) supports **On**, **Off**, and **Ask** preferences for the four skills. It also states that Simple/Agent-based development choice is independent of skill selection. Merge it manually with your effective global instructions; it does not edit or override them. These are conversation conventions, not enforced Codex settings. The GUI can copy a generated instruction block without changing any file.
+The optional selector instruction in [`optional/global-session-selector.md`](optional/global-session-selector.md) supports **On**, **Off**, and **Ask** preferences for the original five skills. It also states that Simple/Agent-based development choice is independent of skill selection. Merge it manually with your effective global instructions; it does not edit or override them. These are conversation conventions, not enforced Codex settings. The GUI can copy a generated instruction block without changing any file.
 
-Explicit skill invocation uses `$getonmylevel-communication`, `$getonmylevel-context`, `$getonmylevel-engineering`, or `$getonmylevel-design`. Higher-priority instructions and available tools always constrain activation; the installed client determines whether a skill is discovered and invoked.
+Explicit skill invocation uses `$getonmylevel-communication`, `$getonmylevel-context`, `$getonmylevel-engineering`, `$getonmylevel-design`, `$getonmylevel-good-software-engineering-practices`, or `$getonmylevel-skill-discovery`. Higher-priority instructions and available tools always constrain activation; the installed client determines whether a skill is discovered and invoked.
 
 ## Optional agent roles
 
@@ -189,9 +191,9 @@ Agent-based development automatically spawns the configured designer then implem
 
 ## Context tools
 
-For this environment, a practical default is existing CodeGraph when available and useful, paired with focused `rg` searches and authoritative source reads. Add a small local architecture summary only when recurring navigation justifies its upkeep. The context skill explains tradeoffs among CodeGraph, Graphify, language-server/AST indexes, targeted search, and local summaries. CodeGraph is optional and is not installed by these tools.
+CodeGraph is an optional user-wide dependency of the context skill. The GUI selects it automatically when that skill is selected and configures Codex globally after confirmation; it may download packages and edit Codex MCP configuration and managed instructions. It does not initialize or index a project. The terminal fallback copies skill files only and does not install CodeGraph.
 
-If you choose CodeGraph, review its current [repository and setup instructions](https://github.com/colbymchenry/codegraph) first. Its documented setup includes `npm install -g @colbymchenry/codegraph`, `codegraph install`, and `codegraph init`. It may change global MCP configuration and AGENTS instructions. Inspect your existing setup and the upstream commands before running them. The getonmylevel tools never install or initialize CodeGraph.
+The GUI shows the planned global setup command and distinguishes an existing CodeGraph command from a planned package installation. If using CodeGraph manually, review its [repository and setup instructions](https://github.com/colbymchenry/codegraph); project indexing is separate from global Codex configuration.
 
 ## Platform notes
 

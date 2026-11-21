@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 import queue
 import threading
-import webbrowser
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -14,6 +13,7 @@ except ImportError as exc:
     raise SystemExit(0)
 
 import common
+import codegraph_installer
 import instruction_integration
 import suggested_installers
 
@@ -39,13 +39,21 @@ class Installer:
         outer = ttk.Frame(root, padding=14)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Install or update getonmylevel skills", font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
-        ttk.Label(outer, text="Choose skills and where to install them. Nothing is written until you select Install and confirm.").pack(anchor="w", pady=(4, 12))
+        ttk.Label(outer, text="Choose skills and where to install them, or remove getonmylevel-managed instructions. Changes require confirmation.").pack(anchor="w", pady=(4, 12))
 
-        skills_box = ttk.LabelFrame(outer, text="Skills", padding=10)
+        skills_box = ttk.LabelFrame(outer, text="Core skills", padding=10)
         skills_box.pack(fill="x")
         self.selected = {name: tk.BooleanVar(value=True) for name in common.SKILL_NAMES}
+        self.skill_checks = []
         for name in common.SKILL_NAMES:
-            ttk.Checkbutton(skills_box, text=name, variable=self.selected[name], command=self.refresh_preview).pack(anchor="w")
+            check = ttk.Checkbutton(skills_box, text=name, variable=self.selected[name], command=self.refresh_preview)
+            check.pack(anchor="w")
+            self.skill_checks.append(check)
+        self.codegraph_selected = tk.BooleanVar(value=False)
+        self.codegraph_check = ttk.Checkbutton(skills_box, text="CodeGraph (optional global Codex integration)",
+                                               variable=self.codegraph_selected, command=self.refresh_preview)
+        self.codegraph_check.pack(anchor="w", pady=(5, 0))
+        self.selected["getonmylevel-context"].trace_add("write", self.context_selection_changed)
 
         scope_box = ttk.LabelFrame(outer, text="Installation scope", padding=10)
         scope_box.pack(fill="x", pady=(10, 0))
@@ -77,22 +85,33 @@ class Installer:
         ttk.Label(outer, text="Preview").pack(anchor="w", pady=(12, 4))
         self.preview = tk.Text(outer, height=9, wrap="word", state="disabled")
         self.preview.pack(fill="both", expand=True)
-        ttk.Button(outer, text="Optional CodeGraph information...", command=self.show_codegraph_info).pack(anchor="w", pady=(8, 10))
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
         self.skill_button = ttk.Button(buttons, text="Install or update selected skills", command=self.install)
         self.skill_button.pack(side="right")
+        self.remove_button = ttk.Button(buttons, text="Remove getonmylevel instructions", command=self.remove_instructions)
+        self.remove_button.pack(side="right", padx=(0, 8))
         self.close_button = ttk.Button(buttons, text="Close", command=self.close)
         self.close_button.pack(side="right", padx=(0, 8))
         self.suggested_busy = False
         self.suggested_confirming = False
         self.suggested_queue = queue.Queue()
+        self.install_queue = queue.Queue()
+        self.install_busy = False
         root.protocol("WM_DELETE_WINDOW", self.close)
-        self.scope_changed()
+        self.context_selection_changed()
+
+    def context_selection_changed(self, *_args) -> None:
+        if self.selected["getonmylevel-context"].get():
+            self.codegraph_selected.set(True)
+            self.codegraph_check.configure(state="disabled")
+        else:
+            self.codegraph_check.configure(state="normal")
+        self.refresh_preview()
 
     def close(self) -> None:
-        if self.suggested_busy or self.suggested_confirming:
+        if self.suggested_busy or self.suggested_confirming or self.install_busy:
             messagebox.showinfo("Installation in progress", "Finish or cancel the suggested installation before closing.")
             return
         self.root.destroy()
@@ -113,11 +132,13 @@ class Installer:
         self.suggested_confirming = True
         self.suggested_button.configure(state="disabled")
         self.skill_button.configure(state="disabled")
+        self.remove_button.configure(state="disabled")
         try:
             confirmed = messagebox.askyesno("Confirm suggested installations", confirmation)
         except tk.TclError as exc:
             self.suggested_button.configure(state="normal")
             self.skill_button.configure(state="normal")
+            self.remove_button.configure(state="normal")
             messagebox.showerror("Confirmation unavailable", f"Could not show the confirmation dialog: {exc}")
             return
         finally:
@@ -125,12 +146,14 @@ class Installer:
         if not confirmed:
             self.suggested_button.configure(state="normal")
             self.skill_button.configure(state="normal")
+            self.remove_button.configure(state="normal")
             return
         self.start_suggested_install(plans)
 
     def start_suggested_install(self, plans: list[suggested_installers.SuggestedInstallPlan]) -> None:
         self.suggested_busy = True
         self.skill_button.configure(state="disabled")
+        self.remove_button.configure(state="disabled")
         self.close_button.configure(state="disabled")
         self.suggested_button.configure(state="disabled")
         for check in self.suggested_checks:
@@ -161,6 +184,7 @@ class Installer:
     def finish_suggested_install(self) -> None:
         self.suggested_busy = False
         self.skill_button.configure(state="normal")
+        self.remove_button.configure(state="normal")
         self.close_button.configure(state="normal")
         self.suggested_button.configure(state="normal")
         for check in self.suggested_checks:
@@ -189,41 +213,65 @@ class Installer:
             self.repo_path.set(chosen)
             self.refresh_preview()
 
-    def show_codegraph_info(self) -> None:
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Optional CodeGraph integration")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        frame = ttk.Frame(dialog, padding=16)
-        frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="CodeGraph is optional and is never installed by this tool.", font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
-        ttk.Label(frame, text="Review the upstream repository and inspect your existing Codex MCP and AGENTS setup before running these commands. Installation may write global MCP configuration and AGENTS instructions.", wraplength=540).pack(anchor="w", pady=(8, 8))
-        ttk.Label(frame, text="npm install -g @colbymchenry/codegraph\ncodegraph install\ncodegraph init", justify="left").pack(anchor="w", pady=(0, 8))
-        ttk.Label(frame, text="https://github.com/colbymchenry/codegraph", wraplength=540).pack(anchor="w")
-        buttons = ttk.Frame(frame)
-        buttons.pack(fill="x", pady=(14, 0))
-        ttk.Button(buttons, text="Open upstream documentation...", command=lambda: webbrowser.open("https://github.com/colbymchenry/codegraph")).pack(side="left")
-        ttk.Button(buttons, text="Close", command=dialog.destroy).pack(side="right")
-
     def selections(self):
         names = [name for name, var in self.selected.items() if var.get()]
-        if self.scope.get() in ("repo", "both") and not self.repo_path.get().strip():
-            raise ValueError("Choose an existing target repository for repository scope.")
-        repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
-        if repo_root is not None and common.canonical(repo_root) == SOURCE_REPO:
-            raise ValueError("The target repository must differ from this source checkout.")
-        roots = common.skill_roots(self.scope.get(), repo_root)
-        copies = common.preflight_skill_copy(SOURCE_ROOT, names, roots)
-        instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names)
-        return names, roots, copies, instruction_plans
+        wants_codegraph = getattr(self, "codegraph_selected", None)
+        wants_codegraph = wants_codegraph.get() if wants_codegraph is not None else False
+        if not names and not wants_codegraph:
+            raise ValueError("Select at least one core skill or CodeGraph.")
+        roots, copies, instruction_plans = [], [], []
+        if names:
+            if self.scope.get() in ("repo", "both") and not self.repo_path.get().strip():
+                raise ValueError("Choose an existing target repository for repository scope.")
+            repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
+            if repo_root is not None and common.canonical(repo_root) == SOURCE_REPO:
+                raise ValueError("The target repository must differ from this source checkout.")
+            roots = common.skill_roots(self.scope.get(), repo_root)
+            copies = common.preflight_skill_copy(SOURCE_ROOT, names, roots)
+            instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names)
+        codegraph_plan = codegraph_installer.plan_install() if wants_codegraph else None
+        return names, roots, copies, instruction_plans, codegraph_plan
+
+    def remove_instructions(self) -> None:
+        try:
+            if self.scope.get() in ("repo", "both") and not self.repo_path.get().strip():
+                raise ValueError("Choose an existing target repository for repository scope.")
+            repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
+            if repo_root is not None and common.canonical(repo_root) == SOURCE_REPO:
+                raise ValueError("The target repository must differ from this source checkout.")
+            plans = instruction_integration.plan_instruction_removals(self.scope.get(), repo_root)
+            if not plans:
+                messagebox.showinfo("Instructions already clear", "No getonmylevel-managed instruction blocks were found in the selected scope.")
+                return
+            paths = "\n".join(str(plan.path) for plan in plans)
+            confirmation = ("Remove the getonmylevel-managed instruction blocks from these files?\n\n"
+                            f"{paths}\n\nOther instructions and installed skill files will remain.")
+            if not messagebox.askyesno("Confirm instruction removal", confirmation):
+                return
+            written = instruction_integration.write_instruction_removals(plans)
+            self.refresh_preview()
+            messagebox.showinfo("Instructions removed", "Removed managed instructions from:\n" + "\n".join(map(str, written)))
+        except (OSError, ValueError) as exc:
+            details = str(exc)
+            if isinstance(exc, instruction_integration.InstructionWriteError):
+                details += "\n\nThe instruction operation is not transactional."
+                if exc.written:
+                    details += "\nFiles already changed: " + ", ".join(map(str, exc.written))
+                details += "\nFailed file: " + str(exc.path)
+            messagebox.showerror("Instruction removal stopped", details)
 
     def refresh_preview(self) -> None:
         try:
             names = [name for name, var in self.selected.items() if var.get()]
-            if self.scope.get() in ("repo", "both") and not self.repo_path.get().strip():
-                raise ValueError("Choose an existing target repository for repository scope.")
-            repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
-            roots = common.skill_roots(self.scope.get(), repo_root)
+            wants_codegraph = getattr(self, "codegraph_selected", None)
+            wants_codegraph = wants_codegraph.get() if wants_codegraph is not None else False
+            roots = []
+            repo_root = None
+            if names:
+                if self.scope.get() in ("repo", "both") and not self.repo_path.get().strip():
+                    raise ValueError("Choose an existing target repository for repository scope.")
+                repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
+                roots = common.skill_roots(self.scope.get(), repo_root)
             plan = common.preflight_skill_copy(SOURCE_ROOT, names, roots) if names else []
             instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names) if names else []
             lines = [f"Skills: {', '.join(names) if names else '(none selected)'}", "Actions:"]
@@ -235,60 +283,140 @@ class Installer:
                 lines.append("\nCodex default-use instructions (existing text is preserved):")
                 lines.extend(f"  {item.action}: {item.path}" for item in instruction_plans)
                 lines.append("The managed instruction asks Codex to read these skills by default when relevant. A new conversation may be needed; higher-priority instructions still apply.")
-            if not names:
-                lines.append("Select at least one skill before installing.")
-        except (OSError, ValueError) as exc:
-            lines = ["Destinations:", f"  {exc}", "Choose an existing repository when repository scope is selected."]
+            if wants_codegraph:
+                codegraph_plan = codegraph_installer.plan_install()
+                lines.extend(["", "CodeGraph: optional user-wide external dependency", codegraph_plan.details,
+                              "  Configure Codex globally: codegraph install --target=codex --location=global --yes",
+                              "  No project indexing or initialization will run. Restart Codex if needed."])
+                if codegraph_plan.npm_install:
+                    lines.append("  Planned package install: npm install -g @colbymchenry/codegraph")
+            if not names and not wants_codegraph:
+                lines.append("Select at least one core skill or CodeGraph before installing.")
+        except (OSError, ValueError, RuntimeError) as exc:
+            lines = ["Installation preview:", f"  {exc}"]
+            if names:
+                lines.append("Choose an existing repository when repository scope is selected.")
+            if wants_codegraph:
+                lines.append("CodeGraph setup is unavailable until its prerequisites are available.")
         self.preview.configure(state="normal")
         self.preview.delete("1.0", "end")
         self.preview.insert("1.0", "\n".join(lines))
         self.preview.configure(state="disabled")
 
     def install(self) -> None:
+        if self.install_busy:
+            return
         try:
-            names, roots, copies, instruction_plans = self.selections()
+            names, roots, copies, instruction_plans, codegraph_plan = self.selections()
             actions = [f"{'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in copies]
             actions.extend(f"Instructions ({item.action.lower()}): {item.path}" for item in instruction_plans)
             confirmation = "Use the skill versions in this checkout?\n\n" + "\n".join(actions)
             if any(operation.is_update for operation in copies):
                 confirmation += "\n\nUpdates replace selected directories and preserve their previous contents in backups."
             confirmation += "\n\nCodex will be instructed to read these skills by default when relevant. Existing instruction text is preserved. A new conversation may be needed; higher-priority instructions still apply."
+            if codegraph_plan:
+                confirmation += ("\n\nCodeGraph is an optional user-wide external dependency. It may download packages and will configure Codex globally, including Codex MCP configuration and managed instructions. "
+                                 "No project will be initialized or indexed. Restart Codex if needed.\n\n" + codegraph_plan.details +
+                                 "\nCommands/actions:\n" + "\n".join("  " + " ".join(command) for command in codegraph_plan.commands))
             if not messagebox.askyesno("Confirm installation or update", confirmation):
                 return
-            result, written = perform_install(copies, instruction_plans)
-            sections = []
-            if result.installed:
-                sections.append("Installed:\n" + "\n".join(result.installed))
-            if result.updated:
-                sections.append("Updated:\n" + "\n".join(result.updated))
-            if result.backups:
-                sections.append("Backups:\n" + "\n".join(result.backups))
-            if written:
-                sections.append("Instruction files updated:\n" + "\n".join(map(str, written)))
-            unchanged = [str(item.path) for item in instruction_plans if item.path not in written]
-            if unchanged:
-                sections.append("Instruction files already current:\n" + "\n".join(unchanged))
-            messagebox.showinfo("Installation complete", "\n\n".join(sections))
-        except (OSError, ValueError) as exc:
-            details = str(exc)
-            if isinstance(exc, common.SkillCopyError):
-                parts = []
-                if exc.installed:
-                    parts.append("Skills already installed: " + ", ".join(exc.installed))
-                if exc.updated:
-                    parts.append("Skills already updated: " + ", ".join(exc.updated))
-                if exc.backups:
-                    parts.append("Backups: " + ", ".join(exc.backups))
-                if parts:
-                    details += "\n\n" + "\n".join(parts) + "\nInstructions were not written because skill copying failed."
-            elif isinstance(exc, instruction_integration.InstructionWriteError):
-                details += "\n\nSkills may already be installed or updated. The instruction operation is not transactional."
-                if exc.written:
-                    details += "\nInstruction files already written: " + ", ".join(map(str, exc.written))
-                details += "\nFailed instruction file: " + str(exc.path)
-            elif 'instruction_plans' in locals():
-                details += "\n\nSkills may already be installed or updated. The instruction operation is not transactional; an earlier instruction file may already have been written. Planned instruction files: " + ", ".join(str(item.path) for item in instruction_plans)
-            messagebox.showerror("Installation stopped", details)
+            self.start_install_worker(names, copies, instruction_plans, codegraph_plan)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.show_install_error(exc, locals().get("instruction_plans"))
+
+    def start_install_worker(self, names, copies, instruction_plans, codegraph_plan) -> None:
+        self.install_busy = True
+        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, self.codegraph_check, *self.skill_checks):
+            widget.configure(state="disabled")
+        self.install_status = tk.Toplevel(self.root)
+        self.install_status.title("Installing selected components")
+        self.install_status.transient(self.root)
+        self.install_status.protocol("WM_DELETE_WINDOW", lambda: None)
+        ttk.Label(self.install_status, text="Installing selected skills and tools. Changes may remain if a later step fails.",
+                  padding=16, wraplength=420).pack()
+
+        def worker() -> None:
+            skill_stage_complete = False
+            try:
+                result, written = perform_install(copies, instruction_plans) if names else (common.SkillCopyResult((), (), ()), [])
+                skill_stage_complete = True
+                codegraph_result = codegraph_installer.install(codegraph_plan) if codegraph_plan else None
+                sections = []
+                if result.installed:
+                    sections.append("Installed:\n" + "\n".join(result.installed))
+                if result.updated:
+                    sections.append("Updated:\n" + "\n".join(result.updated))
+                if result.backups:
+                    sections.append("Backups:\n" + "\n".join(result.backups))
+                if written:
+                    sections.append("Instruction files updated:\n" + "\n".join(map(str, written)))
+                unchanged = [str(item.path) for item in instruction_plans if item.path not in written]
+                if unchanged:
+                    sections.append("Instruction files already current:\n" + "\n".join(unchanged))
+                if codegraph_result:
+                    sections.append("CodeGraph:\n" + codegraph_result)
+                self.install_queue.put((True, "\n\n".join(sections) or "Nothing required changes."))
+            except Exception as exc:
+                message = str(exc)
+                if isinstance(exc, instruction_integration.InstructionWriteError):
+                    message += "\n\nSkills may already be installed or updated. The instruction operation is not transactional."
+                    if exc.written:
+                        message += "\nInstruction files already written: " + ", ".join(map(str, exc.written))
+                    message += "\nFailed instruction file: " + str(exc.path)
+                if codegraph_plan and skill_stage_complete:
+                    message = "Skills and their instruction updates completed; CodeGraph setup failed and partial CodeGraph changes may remain. " + message
+                elif codegraph_plan:
+                    message += "\nCodeGraph setup was not started because the skill stage failed."
+                self.install_queue.put((False, message))
+
+        try:
+            threading.Thread(target=worker, daemon=True).start()
+        except (RuntimeError, OSError) as exc:
+            self.finish_install_worker()
+            self.install_status.destroy()
+            messagebox.showerror("Installation could not start", f"Could not start the installation worker: {exc}")
+            return
+        self.root.after(100, self.poll_install_result)
+
+    def finish_install_worker(self) -> None:
+        self.install_busy = False
+        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, *self.skill_checks):
+            widget.configure(state="normal")
+        self.context_selection_changed()
+
+    def poll_install_result(self) -> None:
+        try:
+            success, message = self.install_queue.get_nowait()
+        except queue.Empty:
+            self.root.after(100, self.poll_install_result)
+            return
+        self.install_status.destroy()
+        self.finish_install_worker()
+        if success:
+            messagebox.showinfo("Installation complete", message)
+        else:
+            messagebox.showerror("Installation stopped", message)
+
+    def show_install_error(self, exc, instruction_plans=None) -> None:
+        details = str(exc)
+        if isinstance(exc, common.SkillCopyError):
+            parts = []
+            if exc.installed:
+                parts.append("Skills already installed: " + ", ".join(exc.installed))
+            if exc.updated:
+                parts.append("Skills already updated: " + ", ".join(exc.updated))
+            if exc.backups:
+                parts.append("Backups: " + ", ".join(exc.backups))
+            if parts:
+                details += "\n\n" + "\n".join(parts) + "\nInstructions were not written because skill copying failed."
+        elif isinstance(exc, instruction_integration.InstructionWriteError):
+            details += "\n\nSkills may already be installed or updated. The instruction operation is not transactional."
+            if exc.written:
+                details += "\nInstruction files already written: " + ", ".join(map(str, exc.written))
+            details += "\nFailed instruction file: " + str(exc.path)
+        elif instruction_plans:
+            details += "\n\nSkill and instruction changes may be partial: " + ", ".join(str(item.path) for item in instruction_plans)
+        messagebox.showerror("Installation stopped", details)
 
 
 def main() -> None:

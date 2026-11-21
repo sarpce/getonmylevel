@@ -19,7 +19,7 @@ An explicit selection in the user's request overrides the saved preference. For 
 
 Independently, on the first anticipated software-change request in an interactive session, offer Simple or Agent-based unless already chosen, even when getonmylevel skills are Off. In Agent-based mode, offer separate Yes/No choices for reviewer and tester unless existing session policy already supplies them. Apply the same response-waiting rules above to these choices, regardless of the saved preference. Honor established session choices and changes. The selector setting does not replace or weaken existing session-development instructions.
 
-Apply selected skills by exact names: getonmylevel-communication, getonmylevel-context, getonmylevel-engineering, getonmylevel-design. Follow their instructions subject to instruction priority, current repository policy, delegation permissions, and available tools.
+Apply selected skills by exact names: getonmylevel-communication, getonmylevel-context, getonmylevel-engineering, getonmylevel-design, getonmylevel-good-software-engineering-practices. Follow their instructions subject to instruction priority, current repository policy, delegation permissions, and available tools.
 ```
 
 The optional agent GUI can copy a generated instruction block for On, Off, or Ask to the clipboard. It does not edit global files automatically.

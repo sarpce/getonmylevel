@@ -5,7 +5,7 @@ Six independently installable skills for Codex or Claude Code, plus optional rol
 ## Prerequisites
 
 - Git to clone this repository.
-- Python 3.11 or newer for the setup tools. They use the standard library; the graphical tools also require a Python build with Tkinter.
+- Python 3.11 or newer for the setup tools. They use the standard library; the graphical tools also require a Python build with Tkinter and a graphical display.
 - Codex or Claude Code for client-native discovery. See the [Codex skills documentation](https://developers.openai.com/codex/skills) and the [Claude Code skills](https://code.claude.com/docs/en/skills), [subagents](https://code.claude.com/docs/en/sub-agents), and [memory](https://code.claude.com/docs/en/memory) documentation.
 
 ```sh
@@ -17,25 +17,36 @@ Choose Codex or Claude Code in the installer. It integrates selected skills into
 
 ## Install skills
 
-Run the graphical installer from any working directory:
+From the checkout, run the graphical installer (from another working directory, use the path to the script):
 
 ```sh
 python tools/install_gui.py
 ```
 
-Select one or more skills and a scope: **User-wide**, **Target repository**, or **Both**. For repository scope, choose an existing target repository. The preview shows skill and instruction actions. The installer uses the skill files in this checkout; it does not download a release. After confirmation, an existing skill directory is replaced with the checked-out version, and its previous contents (including local edits) are kept under `getonmylevel-backups` beside the skills directory. Existing files, symlinks, junctions, and other detected reparse points are refused as skill destinations, as are linked or invalid managed paths. An I/O error during a multi-skill operation can leave earlier completed copies in place; the tool reports completed changes and backup paths.
+Choose a client and select one or more skills, CodeGraph, or both. For skills, choose **User-wide**, **Target repository**, or **Both**; repository scope requires an existing target directory. The preview shows skill and instruction actions. CodeGraph is always configured globally for the selected client, regardless of skill scope, and can be selected without a skill or target repository. The installer uses the skill files in this checkout; it does not download a release. After confirmation, an existing skill directory is replaced with the checked-out version, and its previous contents (including local edits) are kept under `getonmylevel-backups` beside the skills directory. Existing files, symlinks, junctions, and other detected reparse points are refused as skill destinations, as are linked or invalid managed paths. An I/O error during a multi-skill operation can leave earlier completed copies in place; the tool reports completed changes and backup paths.
 
-Codex user-wide skills go to `$HOME/.agents/skills`; their instructions go in `$CODEX_HOME/AGENTS.md` when `CODEX_HOME` is set, otherwise `~/.codex/AGENTS.md`. Repository skills go to `<repo>/.agents/skills` and their instructions to `AGENTS.md` (a nonempty `AGENTS.override.md` takes precedence). Claude Code user skills go to `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when set; instructions go in the matching `CLAUDE.md`. Repository Claude skills go to `<repo>/.claude/skills`, with instructions in `<repo>/CLAUDE.md`. Installing in both scopes may cause duplicate skill discovery; usually choose one. Restart or start a new conversation if the client does not discover the new skills or instructions.
+### Client capabilities and paths
+
+| | Codex | Claude Code |
+| --- | --- | --- |
+| User-wide skills | `~/.agents/skills` | `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills` |
+| User-wide instructions | `$CODEX_HOME/AGENTS.md` or `~/.codex/AGENTS.md` | `$CLAUDE_CONFIG_DIR/CLAUDE.md` or `~/.claude/CLAUDE.md` |
+| Repository skills and instructions | `<repo>/.agents/skills`, `<repo>/AGENTS.md` | `<repo>/.claude/skills`, `<repo>/CLAUDE.md` |
+| Agent files, user-wide | `$CODEX_HOME/agents` or `~/.codex/agents` (TOML) | `$CLAUDE_CONFIG_DIR/agents` or `~/.claude/agents` (Markdown) |
+| Agent files, repository | `<repo>/.codex/agents` (TOML) | `<repo>/.claude/agents` (Markdown) |
+| Optional integrations | CodeGraph; suggested tools section | CodeGraph; suggested tools section disabled |
+
+Environment-variable paths apply when the variable is set; otherwise the home-directory path is used. For Codex instructions, the installer selects a nonempty `AGENTS.override.md` in preference to `AGENTS.md` at either scope. **Both** writes to both selected scope locations and may cause duplicate skill discovery; usually choose one. Skills and agents have separate client and scope controls and separate confirmations. Start a new conversation if changed instructions are not picked up; restart the selected client if new skills are not discovered or the CodeGraph MCP server is unavailable. Client behavior depends on its version and configuration.
 
 In **Agents**, Codex roles use the existing TOML format and local Codex model discovery. Claude Code roles use native Markdown subagent files. Model and effort fields are editable for each role; Claude offers common aliases as suggestions and also accepts full model IDs. A selected ID does not guarantee account access or model availability. The suggested RTK, Last 30 Days, and CLI-Anything installers are Codex-only and are disabled when Claude Code is selected. CodeGraph can be configured for either client.
 
-The managed block preserves surrounding instruction text. Later installs add newly selected skill names to the existing block; deselecting a skill does not remove it. Malformed or manually edited managed blocks are refused for manual repair. To turn off the default preference, remove the exact region beginning `<!-- getonmylevel-skills:begin -->` and ending `<!-- getonmylevel-skills:end -->`; this leaves installed skill directories in place. Instructions are subject to higher-priority guidance and Codex's `project_doc_max_bytes` limit, so a large instruction file may prevent the block from being read.
+The managed block preserves surrounding instruction text. Later installs add newly selected skill names to the existing block; deselecting a skill does not remove it. Malformed or manually edited managed blocks are refused for manual repair. To turn off the default preference, select the client and scope and use **Remove getonmylevel instructions** in the GUI, or remove the exact region beginning `<!-- getonmylevel-skills:begin -->` and ending `<!-- getonmylevel-skills:end -->`. Either leaves installed skill directories in place. Instructions are subject to higher-priority guidance and Codex's `project_doc_max_bytes` limit, so a large instruction file may prevent the block from being read.
 
 Selecting **getonmylevel-skill-discovery** also adds an instruction to review available skills and relevant skill locations for each task, and use skills when they can materially help. The GUI labels the bundled choices **Core skills**. CodeGraph is an independent recommendation for Codex and Claude Code, whether or not the context skill is selected. If explicitly selected and missing, Node.js and npm are required to install it. Global setup may download packages and changes the selected client's MCP configuration and managed instructions. The GUI does not initialize or index a project; indexing is a separate choice. Restart the selected client if its MCP server is not available.
 
 ### Suggested skillsets and tools
 
-The GUI includes an unchecked-by-default **Suggested skillsets and tools** section for [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), and [CLI-Anything](https://github.com/HKUDS/CLI-Anything). It detects Last 30 Days and CLI-Anything in `~/.agents/skills` and `$CODEX_HOME/skills` (or `~/.codex/skills` when `CODEX_HOME` is unset), shows every detected location, and lets you install absent skills or remove detected skill directories. Use **Refresh status** to rescan. Removals list the exact directories and require confirmation; linked paths or trees without `SKILL.md` are refused. Installations refuse to create a duplicate when either supported location already contains the skill. Each operation reports its result independently.
+The Codex view includes an unchecked-by-default **Suggested skillsets and tools** section for [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), and [CLI-Anything](https://github.com/HKUDS/CLI-Anything); the section is disabled for Claude Code. It detects Last 30 Days and CLI-Anything in `~/.agents/skills` and `$CODEX_HOME/skills` (or `~/.codex/skills` when `CODEX_HOME` is unset), shows every detected location, and lets you install absent skills or remove detected skill directories. Use **Refresh status** to rescan. Removals list the exact directories and require confirmation; linked paths or trees without `SKILL.md` are refused. Installations refuse to create a duplicate when either supported location already contains the skill. Each operation reports its result independently.
 
 Last 30 Days requires Git and installs the complete upstream `skills/last30days` directory to `~/.agents/skills/last30days` from selected commit `bb2f1ed2b9f6d07b90557c5eebd736b566533fec`. CLI-Anything requires Git plus PowerShell on Windows or Bash on macOS/Linux. It runs the upstream Codex skill installer from selected commit `34f519533bc175d2fe287ab8316b0dd99bb9cc43`, which installs the generator skill and its supporting resources to `$CODEX_HOME/skills/cli-anything` or `~/.codex/skills/cli-anything`; it does not install all application harnesses. The installer fetches each commit, checks out detached, and verifies `HEAD` before copying or executing. These selected revisions have not been represented as integration-tested. Last 30 Days files are copied without executing their code. CLI-Anything executes upstream code with your user privileges.
 
@@ -183,15 +194,15 @@ Explicit skill invocation uses `$getonmylevel-communication`, `$getonmylevel-con
 
 ## Optional agent roles
 
-The optional TOML templates in [`optional/agents`](optional/agents) configure designer, implementer, reviewer, and tester roles separately from the skills. Run the GUI with:
+The optional templates in [`optional/agents`](optional/agents) configure designer, implementer, reviewer, and tester roles separately from the skills. Run the GUI with:
 
 ```sh
 python tools/agents_gui.py
 ```
 
-Choose roles and global user, repository, or both scopes. Global files go to `$CODEX_HOME/agents` when set, otherwise `~/.codex/agents`. Repository files go to `<target-repository>/.codex/agents`. The tool shows a preview and requires confirmation. It updates only files bearing its management marker and exact template instructions, preserving existing model and reasoning-effort values in editable controls. Unknown or hand-edited templates and symlinks are refused. Each file replacement is atomic; a set of files is not transactional. It never edits `AGENTS.md` or Codex configuration.
+Choose the client, roles, and global user, repository, or both scopes. Destinations and file formats are listed in the [client table](#client-capabilities-and-paths). The tool shows a preview and requires confirmation. It updates only files bearing its management marker and exact template instructions, preserving existing model and reasoning-effort values in editable controls. Unknown or hand-edited templates and symlinks are refused. Each file replacement is atomic; a set of files is not transactional. It does not edit client instruction or configuration files.
 
-Model and effort fields are editable. Blank values inherit Codex defaults. **Refresh available models** is an explicit request to the local `codex app-server`; it requires Codex on `PATH` or, on Windows, the Codex VS Code extension installed in its standard location. It uses the documented [`model/list` API](https://developers.openai.com/codex/app-server) and [`agents` configuration](https://developers.openai.com/codex/multi-agent). Model discovery may be unavailable; in that case enter values manually. A listed model does not guarantee account access or entitlement. The tool does not log credentials or make network calls itself.
+Model and effort fields are editable; blank values inherit client defaults. For Codex, **Refresh available models** explicitly queries the local `codex app-server`; it requires Codex on `PATH` or, on Windows, the Codex VS Code extension installed in its standard location. It uses the documented [`model/list` API](https://developers.openai.com/codex/app-server) and [`agents` configuration](https://developers.openai.com/codex/multi-agent). Model discovery may be unavailable; in that case enter values manually. Claude Code offers model aliases as suggestions and accepts full IDs. A selected model does not guarantee account access or entitlement. The tool does not log credentials or make network calls itself.
 
 Generated instructions let straightforward software changes proceed directly without a mode prompt. Agent-based work is available when explicitly requested or useful under the active session's delegation rules. For larger work, the configured designer and implementer can be used when delegation is permitted. Independent review and testing remain separate choices, each disabled unless selected. These are natural-language instructions and cannot override higher-priority session rules or guarantee client behavior.
 

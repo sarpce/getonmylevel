@@ -11,15 +11,15 @@ Set the preference to exactly one of: On, Off, or Ask. This setting is an instru
 
 - On: use all installed getonmylevel skills.
 - Off: use none of the getonmylevel skills unless the user explicitly selects one.
-- Ask: offer All three, Select individually, or None. Use an available choice interface; otherwise ask in chat. Wait for a real answer before dependent work. If the choice interface is asynchronous, keep the turn active and wait while the client supports it. Do not treat a default or elapsed time as an answer. Honor later changes.
+- Ask: offer All installed getonmylevel skills, Select individually, or None. **Wait for the user's actual response before dependent work.** Use a choice interface only if the client can deliver its response. For an asynchronous prompt, keep the turn active and wait if supported; do not finish the turn while the response is pending. A default, timeout, or elapsed time is not an answer. If the CLI or other client cannot wait for or deliver the response, ask in chat and end the turn with the question pending; resume dependent work after the user responds. Honor later changes.
 
 Honor user changes to the preference or skill selection at any point in the conversation, regardless of the saved preference.
 
 An explicit selection in the user's request overrides the saved preference. For Ask/individual selection, wait for the chosen skill names before work that depends on them. Use only installed, available skills. In unattended runs, never prompt: use an explicit selection if provided, otherwise none.
 
-Independently, on the first anticipated software-change request in an interactive session, offer Simple or Agent-based unless already chosen, even when getonmylevel skills are Off. In Agent-based mode, offer separate Yes/No choices for reviewer and tester unless existing session policy already supplies them; wait for missing answers. Honor established session choices and changes. The selector setting does not replace or weaken existing session-development instructions.
+Independently, on the first anticipated software-change request in an interactive session, offer Simple or Agent-based unless already chosen, even when getonmylevel skills are Off. In Agent-based mode, offer separate Yes/No choices for reviewer and tester unless existing session policy already supplies them. Apply the same response-waiting rules above to these choices, regardless of the saved preference. Honor established session choices and changes. The selector setting does not replace or weaken existing session-development instructions.
 
-Apply selected skills by exact names: getonmylevel-communication, getonmylevel-context, getonmylevel-engineering. Follow their instructions subject to instruction priority, current repository policy, delegation permissions, and available tools.
+Apply selected skills by exact names: getonmylevel-communication, getonmylevel-context, getonmylevel-engineering, getonmylevel-design. Follow their instructions subject to instruction priority, current repository policy, delegation permissions, and available tools.
 ```
 
 The optional agent GUI can copy a generated instruction block for On, Off, or Ask to the clipboard. It does not edit global files automatically.

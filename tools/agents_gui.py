@@ -355,10 +355,11 @@ class AgentConfigurator:
         block = {
             "On": "For this session, use all installed getonmylevel skills unless the user explicitly selects a different set.",
             "Off": "For this session, use no getonmylevel skills unless the user explicitly selects one or more.",
-            "Ask": "At the start of each interactive conversation, unless the user already specifies a selection, offer All three getonmylevel skills, Select individually, or None. Use a choice interface when available; otherwise ask in chat. Keep the turn active and wait for a real answer where supported. Do not count a default or elapsed time as an answer. Honor explicit selections and later changes. In unattended runs, do not prompt; use an explicit selection or none.",
+            "Ask": "At the start of each interactive conversation, unless the user already specifies a selection, offer All installed getonmylevel skills, Select individually, or None. Wait for the selection before dependent work. Honor explicit selections and later changes. In unattended runs, do not prompt; use an explicit selection or none.",
         }[preference]
         block += " Honor user changes to the preference or selection at any point in the conversation."
         block += "\n\nIndependently, on the first anticipated software-change request in a session, offer Simple or Agent-based unless already chosen, even when getonmylevel skills are Off. In Agent-based mode, offer independent Yes/No choices for reviewer and tester unless session instructions already supply them. Wait for the answers. Follow existing session and repository policy; this block cannot override higher-priority instructions or guarantee activation."
+        block += "\n\nFor these questions, wait for the user's actual response before dependent work. Use a choice interface only if the client can deliver its response. For an asynchronous prompt, keep the turn active and wait if supported; do not finish the turn while the response is pending. A default, timeout, or elapsed time is not an answer. If the CLI or other client cannot wait for or deliver the response, ask in chat and end the turn with the question pending; resume dependent work after the user responds."
         self.root.clipboard_clear()
         self.root.clipboard_append(block)
         messagebox.showinfo("Copied", "Session instruction block copied to the clipboard. It was not added to any global file.")

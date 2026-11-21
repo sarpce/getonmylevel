@@ -42,29 +42,45 @@ class InstructionIntegrationTests(unittest.TestCase):
         self.assertEqual(repo.path, self.repo / "AGENTS.md")
         self.assertEqual([p.path for p in both], [user.path, repo.path])
 
-    def test_instructions_are_idempotent_and_accumulate_subset(self):
-        first = integration.plan_instruction_updates("user", None, SKILLS[:1])
-        integration.write_instruction_updates(first)
-        second = integration.plan_instruction_updates("user", None, SKILLS[1:2])
-        integration.write_instruction_updates(second)
-        content = (self.codex / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertIn(SKILLS[0], content)
-        self.assertIn(SKILLS[1], content)
-        current = integration.plan_instruction_updates("user", None, SKILLS[:1])
-        self.assertEqual(current[0].action, "Already current")
-        before = current[0].path.read_bytes()
-        self.assertEqual(integration.write_instruction_updates(current), [])
-        self.assertEqual(current[0].path.read_bytes(), before)
-
-    def test_direct_work_default_is_generated_for_both_clients_and_scopes(self):
-        required = ("straightforward software changes directly", "agent-based work",
-                    "independent review and testing", "each disabled unless selected", "higher-priority")
+    def test_exact_selection_and_no_embedded_policy(self):
+        design, engineering = "getonmylevel-design", "getonmylevel-engineering"
         for client in ("codex", "claude"):
             for scope in ("user", "repo"):
-                with self.subTest(client=client, scope=scope):
-                    block = integration._block(SKILLS[:1], scope, "\n", client)
-                    for phrase in required:
-                        self.assertIn(phrase, block)
+                block = integration._block([design], scope, "\n", client)
+                self.assertIn(design, block)
+                for word in ("delegation", "review", "testing", "For each task"):
+                    self.assertNotIn(word, block)
+        path = self.codex / "AGENTS.md"
+        original = b"\xef\xbb\xbfBefore\r\n" + integration._current_block([design, engineering], "user", "\r\n").encode() + b"\r\nAfter\r\n"
+        path.write_bytes(original)
+        plan, = integration.plan_instruction_updates("user", None, [design])
+        integration.write_instruction_updates([plan])
+        content = path.read_bytes()
+        self.assertTrue(content.startswith(b"\xef\xbb\xbfBefore\r\n"))
+        self.assertTrue(content.endswith(b"\r\nAfter\r\n"))
+        self.assertIn(design.encode(), content)
+        self.assertNotIn(engineering.encode(), content)
+        self.assertEqual(integration.plan_instruction_updates("user", None, [design])[0].action, "Already current")
+        plan, = integration.plan_instruction_updates("user", None, [])
+        integration.write_instruction_updates([plan])
+        self.assertEqual(path.read_bytes(), b"\xef\xbb\xbfBefore\r\n\r\nAfter\r\n")
+
+    def test_activation_scope_and_missing_files(self):
+        import skill_operations
+        design, engineering = "getonmylevel-design", "getonmylevel-engineering"
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex), "HOME": str(self.root), "USERPROFILE": str(self.root)}), mock.patch.object(common, "skill_roots", side_effect=lambda scope, repo, client: [self.root / scope / "skills"]):
+            user = self.root / "user" / "skills"
+            (user / engineering).mkdir(parents=True)
+            (user / engineering / "SKILL.md").write_bytes(b"unchanged")
+            copies, plans = skill_operations.plan_activation({"user": [design], "repo": [engineering]}, self.repo, "codex")
+            self.assertEqual({c.destination.name for c in copies}, {design, engineering})
+            self.assertEqual(len(plans), 2)
+            skill_operations.perform_install(copies, plans)
+            self.assertEqual((user / engineering / "SKILL.md").read_bytes(), b"unchanged")
+            self.assertEqual(integration.active_skills("both", self.repo), {"user": [design], "repo": [engineering]})
+            copies, plans = skill_operations.plan_activation({"user": [design], "repo": [engineering]}, self.repo, "codex")
+            self.assertEqual(copies, [])
+            self.assertTrue(all(p.action == "Already current" for p in plans))
 
     def test_previous_managed_blocks_upgrade_and_remain_removable_for_clients_and_scopes(self):
         claude = self.root / "claude"
@@ -83,7 +99,7 @@ class InstructionIntegrationTests(unittest.TestCase):
                         self.assertEqual(plan.action, "Update")
                         integration.write_instruction_updates([plan], client)
                         updated = path.read_text(encoding="utf-8")
-                        self.assertIn("straightforward software changes directly", updated)
+                        self.assertNotIn("straightforward software changes directly", updated)
                         self.assertTrue(updated.startswith("Before\n"))
                         self.assertTrue(updated.endswith("\nAfter\n"))
                         self.assertEqual(integration.plan_instruction_updates(scope, self.repo if scope == "repo" else None, SKILLS[:1], client)[0].action, "Already current")
@@ -97,7 +113,7 @@ class InstructionIntegrationTests(unittest.TestCase):
         plan, = integration.plan_instruction_updates("user", None, SKILLS[:1])
         self.assertEqual(plan.action, "Update")
         integration.write_instruction_updates([plan])
-        self.assertIn("straightforward software changes directly", path.read_text(encoding="utf-8"))
+        self.assertNotIn("straightforward software changes directly", path.read_text(encoding="utf-8"))
 
     def test_legacy_claude_block_upgrades(self):
         claude = self.root / "claude"
@@ -108,7 +124,7 @@ class InstructionIntegrationTests(unittest.TestCase):
             plan, = integration.plan_instruction_updates("user", None, SKILLS[:1], "claude")
             self.assertEqual(plan.action, "Update")
             integration.write_instruction_updates([plan], "claude")
-            self.assertIn("straightforward software changes directly", path.read_text(encoding="utf-8"))
+            self.assertNotIn("straightforward software changes directly", path.read_text(encoding="utf-8"))
 
     def test_clipboard_selector_uses_direct_default_and_keeps_review_choices(self):
         class Clipboard:
@@ -135,22 +151,10 @@ class InstructionIntegrationTests(unittest.TestCase):
             self.assertIn(phrase.casefold(), copied)
         self.assertNotIn("choose simple or agent-based", copied)
 
-    def test_discovery_skill_adds_instruction_to_existing_block(self):
-        path = self.codex / "AGENTS.md"
-        original = integration._block(SKILLS[:1], "user", "\n")
-        path.write_text("Before\n" + original + "\nAfter\n", encoding="utf-8")
+    def test_discovery_policy_stays_in_skill(self):
         plan, = integration.plan_instruction_updates("user", None, ["getonmylevel-skill-discovery"])
-        integration.write_instruction_updates([plan])
-        content = path.read_text(encoding="utf-8")
-        self.assertTrue(content.startswith("Before\n"))
-        self.assertTrue(content.endswith("\nAfter\n"))
-        self.assertIn("review the available skills", content)
-        self.assertIn(".agents/skills", content)
-        self.assertIn(".skills", content)
-        self.assertEqual(integration.plan_instruction_updates("user", None, SKILLS[:1])[0].action, "Already current")
-        removal, = integration.plan_instruction_removals("user", None)
-        integration.write_instruction_removals([removal])
-        self.assertEqual(path.read_text(encoding="utf-8"), "Before\nAfter\n")
+        self.assertNotIn(b"review the available skills", plan.proposed)
+        self.assertIn(b"getonmylevel-skill-discovery/SKILL.md", plan.proposed)
 
     def test_preserves_bom_crlf_and_text_around_block(self):
         path = self.codex / "AGENTS.md"
@@ -271,13 +275,15 @@ class InstructionIntegrationTests(unittest.TestCase):
         installer.install_busy = False
         operation = common.SkillCopy(Path("source"), Path("destination"), None)
         instruction = integration.InstructionUpdate(self.codex / "AGENTS.md", None, b"block", "Create")
+        installer.activation_vars = {"user": {SKILLS[0]: Variable(True)}}
+        installer.activation_plan = mock.Mock(return_value=({"user": [SKILLS[0]]}, [operation], [instruction]))
         with mock.patch.object(common, "skill_roots", return_value=[self.root / "skills"]), \
              mock.patch.object(common, "preflight_skill_copy", return_value=[operation]), \
              mock.patch.object(integration, "plan_instruction_updates", return_value=[instruction]):
             installer.refresh_preview()
         self.assertIn("Install: destination", installer.preview.value)
         self.assertIn(f"Create: {instruction.path}", installer.preview.value)
-        self.assertIn("existing text is preserved", installer.preview.value)
+        self.assertIn("Required installation: destination", installer.preview.value)
 
         installer.selections = mock.Mock(return_value=([SKILLS[0]], [], [operation], [instruction], None))
         with mock.patch.object(install_gui.messagebox, "askyesno", return_value=False) as confirm, \
@@ -286,7 +292,6 @@ class InstructionIntegrationTests(unittest.TestCase):
         confirmation = confirm.call_args.args[1]
         self.assertIn(str(instruction.path), confirmation)
         self.assertIn("Instructions (create)", confirmation)
-        self.assertIn("Existing instruction text is preserved", confirmation)
         perform.assert_not_called()
 
 

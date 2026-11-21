@@ -28,13 +28,13 @@ python tools/install_gui.py
 ```
 
 1. In **Skills & installation**, choose **Codex** or **Claude Code**, then select skills and a scope. For repository scope, choose an existing repository. CodeGraph is an independent optional selection and can be installed on its own.
-2. Review the preview and confirm. Selected skills are copied from this checkout and receive managed default-use instructions for the chosen client.
+2. Review the preview and confirm. Selected skills are copied from this checkout. Use **Active by default** separately to select and apply the skills the client should read when relevant; the preview shows any missing files required for activation.
 3. In **Agents**, optionally choose the client, roles, scope, and per-role model settings. Review and confirm those changes separately.
 4. Start a new conversation if changed instructions are not picked up. Restart the selected client if new skills or the CodeGraph MCP server are not discovered.
 
 Already have a skill installed? GUI updates it and keeps the old directory in a `getonmylevel-backups` folder beside the skills directory. A failed multi-skill operation can leave earlier changes in place; read the result. To open the same app through the agent entry point, run `python tools/agents_gui.py`.
 
-For headless or automated setup, install all bundled skills and their default-use instructions with:
+For headless or automated setup, install all bundled skills with:
 
 ```sh
 python tools/install.py install --client codex --scope user
@@ -44,9 +44,9 @@ Use `--client claude` for Claude Code, `--dry-run` to preview, and `update` or `
 
 ## Use skills and agents
 
-The installer asks the selected client to read installed skills by default when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering` or `$getonmylevel-design`. Your instructions and higher-priority rules still apply.
+The Active by default checklist controls which installed skills the selected client is asked to read when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering` or `$getonmylevel-design`. Your instructions and higher-priority rules still apply.
 
-Straightforward tasks proceed directly. For example, a one-line bug fix or documentation edit needs no workflow prompt. Agent-based work remains available when you request it or it would materially help under the active session's delegation rules. For a larger cross-module change, the engineering skill can use the configured designer and implementer roles. Independent review and testing remain separate choices, each disabled unless you select it. Higher-priority session instructions still apply.
+When the engineering skill is active, straightforward tasks proceed directly. For example, a one-line bug fix or documentation edit needs no workflow prompt. Agent-based work remains available when you request it or it would materially help under the active session's delegation rules. For a larger cross-module change, the engineering skill can use the configured designer and implementer roles. Independent review and testing remain separate choices, each disabled unless you select it. Higher-priority session instructions still apply.
 
 The Agents tab can also copy an optional On/Off/Ask session preference block. It does not write that block to a file; merge it into your instructions yourself if wanted. See [session selector](optional/global-session-selector.md) for its scope.
 

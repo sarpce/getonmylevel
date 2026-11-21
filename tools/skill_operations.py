@@ -23,7 +23,7 @@ def roots_for(scope, repo, client):
 def plan_install(names, scope, repo, client):
     repo, roots = roots_for(scope, repo, client)
     copies = common.preflight_skill_copy(SOURCE_ROOT, names, roots)
-    plans = instructions.plan_instruction_updates(scope, repo, names, client)
+    plans = []
     return roots, copies, plans
 
 
@@ -70,3 +70,25 @@ def perform_remove(paths, plans, client):
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"Removal stopped; completed backups: {', '.join(backups) or 'none'}. {exc}") from exc
     return backups, written
+
+
+def plan_activation(selections, repo, client):
+    """Plan exact per-scope activation and install only missing skill files."""
+    copies, plans = [], []
+    for scope, names in selections.items():
+        target_repo, roots = roots_for(scope, repo, client)
+        root = roots[0]
+        common.check_managed_root(root)
+        missing = []
+        for name in names:
+            path = root / name
+            if common.is_link_or_reparse(path):
+                raise ValueError(f"Refusing linked or reparse-point destination: {path}")
+            if not (path / "SKILL.md").is_file():
+                if path.exists():
+                    raise ValueError(f"Refusing directory without SKILL.md: {path}")
+                missing.append(name)
+        if missing:
+            copies.extend(common.preflight_skill_copy(SOURCE_ROOT, missing, roots))
+        plans.extend(instructions.plan_instruction_updates(scope, target_repo, names, client))
+    return copies, plans

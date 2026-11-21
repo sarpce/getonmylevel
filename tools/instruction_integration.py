@@ -66,7 +66,7 @@ def _instruction_path(root: Path, client: str = "codex") -> Path:
     return candidates[-1]
 
 
-def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+def _current_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
     if client not in ("codex", "claude"):
         raise ValueError(f"Unknown client: {client}")
     folder = ".claude" if client == "claude" else ".agents"
@@ -85,6 +85,13 @@ def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> 
              "Handle straightforward software changes directly without asking for a workflow choice. Use agent-based work when explicitly requested or useful under the active session's delegation rules. Preserve user control over independent review and testing: ask separately when relevant, and keep each disabled unless selected. Wait for actual answers to those choices before dependent work. Respect user preferences and higher-priority session instructions.",
              "Honor explicit user changes to this preference and higher-priority instructions.", END]
     return newline.join(line for line in lines if line is not None)
+
+
+def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+    old = _legacy_block(names, kind, newline, client)
+    lines = old.split(newline)
+    return newline.join(line for line in lines if not line.startswith("For each task,")
+                        and not line.startswith("Honor explicit user changes"))
 
 
 def _previous_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
@@ -151,7 +158,7 @@ def _parse_block(text: str, kind: str, newline: str, client: str = "codex") -> l
             if name not in common.SKILL_NAMES or name in names:
                 raise ValueError(f"Managed skill instruction block has an unknown or duplicate skill: {name!r}.")
             names.append(name)
-    if not names or body not in (_block(names, kind, newline, client), _previous_block(names, kind, newline, client), _legacy_block(names, kind, newline, client)):
+    if not names or body not in (_block(names, kind, newline, client), _current_block(names, kind, newline, client), _previous_block(names, kind, newline, client), _legacy_block(names, kind, newline, client)):
         raise ValueError("Managed skill instruction block was edited or is malformed; repair or remove it manually.")
     return names
 
@@ -165,7 +172,12 @@ def _updated_bytes(original: bytes | None, kind: str, selected: list[str], clien
         raise ValueError("Instruction file must be valid UTF-8 to preserve it safely.") from exc
     newline = "\r\n" if "\r\n" in text else "\n"
     existing = _parse_block(text, kind, newline, client)
-    names = [name for name in common.SKILL_NAMES if name in set((existing or []) + selected)]
+    names = [name for name in common.SKILL_NAMES if name in selected]
+    if not names:
+        if existing is None:
+            return original or b"", "Already current"
+        start, finish = text.index(BEGIN), text.index(END) + len(END)
+        return bom + (text[:start] + text[finish:]).encode("utf-8"), "Remove"
     block = _block(names, kind, newline, client)
     if existing is not None:
         start, finish = text.index(BEGIN), text.index(END) + len(END)
@@ -182,7 +194,7 @@ def _updated_bytes(original: bytes | None, kind: str, selected: list[str], clien
 
 
 def plan_instruction_updates(scope: str, repo_root: Path | None, names: list[str], client: str = "codex") -> list[InstructionUpdate]:
-    selected = common.validate_selection(names, common.SKILL_NAMES, "skill")
+    selected = common.validate_selection(names, common.SKILL_NAMES, "skill") if names else []
     plans: list[InstructionUpdate] = []
     for kind, root in _instruction_roots(scope, repo_root, client):
         path = _instruction_path(root, client)
@@ -190,6 +202,20 @@ def plan_instruction_updates(scope: str, repo_root: Path | None, names: list[str
         proposed, action = _updated_bytes(original, kind, selected, client)
         plans.append(InstructionUpdate(path, original, proposed, action))
     return plans
+
+
+def active_skills(scope: str, repo_root: Path | None, client: str = "codex") -> dict[str, list[str]]:
+    result = {}
+    for kind, root in _instruction_roots(scope, repo_root, client):
+        path = _instruction_path(root, client)
+        raw = path.read_bytes() if path.exists() else b""
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Instruction file must be valid UTF-8 to preserve it safely.") from exc
+        newline = "\r\n" if "\r\n" in text else "\n"
+        result[kind] = _parse_block(text, kind, newline, client) or []
+    return result
 
 
 def _removed_bytes(original: bytes, kind: str, client: str = "codex") -> bytes:

@@ -126,6 +126,18 @@ class Installer:
         ttk.Entry(repo_row, textvariable=self.repo_path).pack(side="left", fill="x", expand=True, padx=8)
         ttk.Button(repo_row, text="Browse…", command=self.browse_repo).pack(side="left")
 
+        self.activation_box = ttk.LabelFrame(outer, text="Active by default", padding=8)
+        self.activation_box.pack(fill="x", pady=(10, 0))
+        ttk.Label(self.activation_box, text="Choose skills to read when relevant. Installed files remain available when unchecked.").pack(anchor="w")
+        self.activation_rows = ttk.Frame(self.activation_box)
+        self.activation_rows.pack(fill="x")
+        self.activation_vars = {}
+        self.activation_cache = {}
+        self.activation_key = None
+        self.activation_button = ttk.Button(self.activation_box, text="Apply active skills...", command=self.apply_activation)
+        self.activation_button.pack(anchor="e")
+        self.repo_path.trace_add("write", lambda *_: self.load_activation())
+
         suggested_box = ttk.LabelFrame(outer, text="Suggested skillsets and tools", padding=8)
         suggested_box.pack(fill="x", pady=(10, 0))
         self.suggested_description = ttk.Label(suggested_box, text="Optional user-wide Codex skills and tools. These suggested installers do not configure Claude Code.",
@@ -175,6 +187,7 @@ class Installer:
         outer.bind("<Configure>", self.fit_page_copy)
         if configure_window:
             root.protocol("WM_DELETE_WINDOW", self.close)
+        self.load_activation()
         self.refresh_preview()
 
     def selected_client(self) -> str:
@@ -225,6 +238,7 @@ class Installer:
             self.skill_card_descriptions[name].configure(wraplength=max(180, card_width - 36))
 
     def client_changed(self) -> None:
+        self.load_activation()
         claude = self.client.get() == "claude"
         self.codegraph_selected.set(self.codegraph_by_client[self.client.get()])
         self.codegraph_check.configure(state="normal")
@@ -388,6 +402,7 @@ class Installer:
         self.suggested_refresh_button.configure(state="disabled" if self.suggested_busy else "normal")
 
     def scope_changed(self) -> None:
+        self.load_activation()
         self.refresh_preview()
 
     def browse_repo(self) -> None:
@@ -395,6 +410,59 @@ class Installer:
         if chosen:
             self.repo_path.set(chosen)
             self.refresh_preview()
+
+    def load_activation(self) -> None:
+        if not hasattr(self, "activation_rows"):
+            return
+        if self.activation_key is not None:
+            self.activation_cache[self.activation_key] = {scope: [n for n, v in variables.items() if v.get()]
+                                                          for scope, variables in self.activation_vars.items()}
+        for widget in self.activation_rows.winfo_children():
+            widget.destroy()
+        self.activation_vars = {}
+        repo_text = self.repo_path.get().strip()
+        key = (self.selected_client(), self.scope.get(), repo_text)
+        self.activation_key = key
+        try:
+            repo = Path(repo_text).expanduser() if repo_text and self.scope.get() in ("repo", "both") else None
+            existing = instruction_integration.active_skills(self.scope.get(), repo, self.selected_client())
+            selections = self.activation_cache.get(key, existing)
+            for scope in existing:
+                row = ttk.Frame(self.activation_rows)
+                row.pack(fill="x")
+                ttk.Label(row, text="User-wide:" if scope == "user" else "Repository:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+                self.activation_vars[scope] = {}
+                for index, name in enumerate(common.SKILL_NAMES):
+                    var = tk.BooleanVar(value=name in selections.get(scope, []))
+                    self.activation_vars[scope][name] = var
+                    ttk.Checkbutton(row, text=SKILL_DESCRIPTIONS[name][0], variable=var,
+                                    command=self.refresh_preview).grid(row=index // 3, column=index % 3 + 1, sticky="w", padx=(0, 8))
+        except (OSError, ValueError) as exc:
+            ttk.Label(self.activation_rows, text=str(exc)).pack(anchor="w")
+        self.refresh_preview()
+
+    def activation_plan(self):
+        if not self.activation_vars:
+            raise ValueError("Choose a valid client and scope for activation.")
+        selections = {scope: [name for name, var in variables.items() if var.get()]
+                      for scope, variables in self.activation_vars.items()}
+        return selections, *skill_operations.plan_activation(selections, self.repo_path.get(), self.selected_client())
+
+    def apply_activation(self) -> None:
+        try:
+            selections, copies, plans = self.activation_plan()
+            lines = [f"{scope}: {', '.join(names) or '(none)'}" for scope, names in selections.items()]
+            lines += [f"Required installation: {copy.destination}" for copy in copies]
+            lines += [f"{plan.action}: {plan.path}" for plan in plans]
+            if not messagebox.askyesno("Confirm active skills", "Apply these default skill selections?\n\n" + "\n".join(lines)):
+                return
+            _, written = perform_install(copies, plans, self.selected_client())
+            self.activation_cache.pop(self.activation_key, None)
+            self.activation_key = None
+            self.load_activation()
+            messagebox.showinfo("Active skills updated", "Updated instruction files:\n" + ("\n".join(map(str, written)) or "None"))
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.show_install_error(exc)
 
     def selections(self):
         client = self.selected_client()
@@ -472,18 +540,18 @@ class Installer:
                 repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
                 roots = common.skill_roots(self.scope.get(), repo_root, client)
             plan = common.preflight_skill_copy(SOURCE_ROOT, names, roots) if names else []
-            instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names, client) if names else []
             lines = [f"Skills: {', '.join(names) if names else '(none selected)'}", "Actions:"]
             lines.extend(f"  {'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in plan)
             if any(operation.is_update for operation in plan):
                 lines.append("\nUpdates replace the selected skill directory. Its previous contents are preserved in a backup.")
             if names:
                 lines.append("\nThe checked-out skill files are the versions this installer installs.")
-            if instruction_plans:
-                client_name = "Claude Code" if self.selected_client() == "claude" else "Codex"
-                lines.append(f"\n{client_name} default-use instructions (existing text is preserved):")
-                lines.extend(f"  {item.action}: {item.path}" for item in instruction_plans)
-                lines.append(f"The managed instruction asks {client_name} to read these skills by default when relevant. A new conversation may be needed; higher-priority instructions still apply.")
+            if getattr(self, "activation_vars", None):
+                selections, required, activation_plans = self.activation_plan()
+                lines.append("\nActive by default:")
+                lines.extend(f"  {scope}: {', '.join(selected) or '(none)'}" for scope, selected in selections.items())
+                lines.extend(f"  Required installation: {item.destination}" for item in required)
+                lines.extend(f"  {item.action}: {item.path}" for item in activation_plans)
             if wants_codegraph:
                 codegraph_plan = codegraph_installer.plan_install(self.selected_client())
                 client_name = "Claude Code" if self.selected_client() == "claude" else "Codex"
@@ -519,8 +587,7 @@ class Installer:
                 confirmation += "\n\nUpdates replace selected directories and preserve their previous contents in backups."
             client = self.selected_client()
             client_name = "Claude Code" if client == "claude" else "Codex"
-            if names:
-                confirmation += f"\n\n{client_name} will be instructed to read these skills by default when relevant. Existing instruction text is preserved. A new conversation may be needed; higher-priority instructions still apply."
+
             if codegraph_plan:
                 confirmation += (f"\n\nCodeGraph is an optional user-wide tool. It may download packages and will configure {client_name} globally, including its MCP configuration and managed instructions. "
                                  f"No project will be initialized or indexed. Restart {client_name} if needed.\n\n" + codegraph_plan.details +
@@ -533,7 +600,7 @@ class Installer:
 
     def start_install_worker(self, names, copies, instruction_plans, codegraph_plan, client) -> None:
         self.install_busy = True
-        for widget in (self.skill_button, self.remove_button, self.remove_skills_button, self.close_button, self.suggested_button, self.codegraph_check, *self.client_buttons, *self.skill_checks):
+        for widget in (self.skill_button, self.remove_button, self.remove_skills_button, self.close_button, self.suggested_button, self.codegraph_check, self.activation_button, *self.client_buttons, *self.skill_checks):
             widget.configure(state="disabled")
         self.install_status = tk.Toplevel(self.root)
         self.install_status.title("Installing selected components")
@@ -587,7 +654,7 @@ class Installer:
 
     def finish_install_worker(self) -> None:
         self.install_busy = False
-        for widget in (self.skill_button, self.remove_button, self.remove_skills_button, self.close_button, self.suggested_button, self.codegraph_check, *self.client_buttons, *self.skill_checks):
+        for widget in (self.skill_button, self.remove_button, self.remove_skills_button, self.close_button, self.suggested_button, self.codegraph_check, self.activation_button, *self.client_buttons, *self.skill_checks):
             widget.configure(state="normal")
         claude = self.client.get() == "claude"
         self.suggested_button.configure(state="disabled" if claude else "normal")

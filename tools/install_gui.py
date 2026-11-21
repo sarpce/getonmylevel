@@ -274,7 +274,7 @@ class Installer:
         actions = [plan.confirmation_text for plan in (*installs, *removals)]
         confirmation = "Review these changes for the current user:\n\n" + "\n\n".join(actions)
         if installs:
-            confirmation += "\n\nUpstream default branches are not pinned. Selected installers may download files or execute upstream code with your privileges."
+            confirmation += "\n\nSelected commits and package versions are shown above. Commits are checked before use. Selected installers may download files; CLI-Anything executes upstream code with your privileges. RTK requires manual installation because package-manager commands float."
         confirmation += "\n\nCanceling makes no changes."
         self.suggested_confirming = True
         self.suggested_button.configure(state="disabled")
@@ -364,13 +364,17 @@ class Installer:
         for item_id, (check, detail) in self.suggested_labels.items():
             item = by_id[item_id]
             locations = status[item_id]
-            action = "manual" if item_id == "rtk" and locations else "remove" if locations else "install"
+            action = "manual" if item_id == "rtk" else "remove" if locations else "install"
             if self.suggested_actions.get(item_id) not in (None, action):
                 self.suggested_selected[item_id].set(False)
             self.suggested_actions[item_id] = action
             if item_id == "rtk" and locations:
                 detail.configure(text=f"{item.description} Installed at {locations}. Remove manually with your package manager.")
                 check.configure(text=f"{item.name} (manual removal)", state="disabled")
+                self.suggested_selected[item_id].set(False)
+            elif item_id == "rtk":
+                detail.configure(text=f"{item.description} Not detected on PATH. Automatic installation is unavailable because package-manager versions move; install a reviewed version manually from {suggested_installers.RTK_INSTALL_URL}.")
+                check.configure(text=f"{item.name} (manual installation only)", state="disabled")
                 self.suggested_selected[item_id].set(False)
             elif locations:
                 detail.configure(text="Installed at: " + ", ".join(map(str, locations)))

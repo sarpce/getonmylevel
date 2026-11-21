@@ -16,6 +16,8 @@ RTK_URL = "https://github.com/rtk-ai/rtk"
 RTK_INSTALL_URL = "https://www.rtk-ai.app/docs/getting-started/installation/"
 LAST30_URL = "https://github.com/mvanhorn/last30days-skill"
 CLI_ANYTHING_URL = "https://github.com/HKUDS/CLI-Anything"
+LAST30_COMMIT = "bb2f1ed2b9f6d07b90557c5eebd736b566533fec"
+CLI_ANYTHING_COMMIT = "34f519533bc175d2fe287ab8316b0dd99bb9cc43"
 
 
 @dataclass(frozen=True)
@@ -86,25 +88,8 @@ def _rtk_plan(system: str | None = None, manager_path: str | None = None) -> tup
     existing_rtk = shutil.which("rtk")
     if existing_rtk:
         return None, f"An executable named rtk already exists at {existing_rtk}; it may be unrelated. Review {RTK_URL}."
-    if system == "Windows":
-        manager, args = "winget", ("install", "--id", "rtk-ai.rtk", "--exact", "--source", "winget",
-                                    "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
-        edition, license_name = "Full edition", "Apache-2.0 plus BUSL-1.1 components"
-        note = "Continuing accepts the winget source and package agreements on your behalf."
-    elif system in ("Darwin", "Linux"):
-        manager, args = "brew", ("install", "rtk-ai/tap/rtk-oss")
-        edition, license_name = "OSS edition (command filters; no RTK pipeline engine)", "Apache-2.0"
-        note = "Homebrew runs in noninteractive mode."
-    else:
-        return None, f"Automatic installation is unsupported on {system}. See {RTK_INSTALL_URL}."
-    executable = manager_path if manager_path is not None else shutil.which(manager)
-    if not executable:
-        return None, f"{manager} was not found. See {RTK_INSTALL_URL}."
-    command = (os.path.abspath(executable), *args)
-    details = (f"{edition}; license: {license_name}. Upstream: {RTK_URL}. {note} Downloads and installs the package. "
-               "It does not activate RTK or configure Codex.")
-    return SuggestedInstallPlan("rtk", "RTK command-output optimizer", None, details, (command,), manager=manager,
-                                license=license_name), None
+    return None, (f"Automatic RTK installation is disabled because Winget and Homebrew select moving package versions. "
+                  f"Install and verify a reviewed version manually using {RTK_INSTALL_URL}; upstream: {RTK_URL}.")
 
 
 def _install_rtk(plan: SuggestedInstallPlan) -> tuple[bool, str]:
@@ -256,10 +241,25 @@ def _reject_linked_tree(root: Path) -> None:
                 raise ValueError(f"Refusing linked or reparse-point source entry: {entry}")
 
 
-def _clone(git: str, url: str, destination: Path) -> tuple[bool, str]:
+def _git_checked(command: tuple[str, ...], env: dict[str, str]) -> tuple[bool, str]:
+    return _run_checked(command, env=env)
+
+
+def _clone(git: str, url: str, commit: str, destination: Path) -> tuple[bool, str]:
     env = dict(os.environ)
     env.update({"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "Never"})
-    return _run_checked((git, "clone", "--depth", "1", url, str(destination)), env=env)
+    commands = ((git, "init", str(destination)),
+                (git, "-C", str(destination), "remote", "add", "origin", url),
+                (git, "-C", str(destination), "fetch", "--depth", "1", "origin", commit),
+                (git, "-C", str(destination), "checkout", "--detach", commit),
+                (git, "-C", str(destination), "rev-parse", "HEAD"))
+    for command in commands:
+        ok, detail = _git_checked(command, env)
+        if not ok:
+            return False, detail
+        if command[-2:] == ("rev-parse", "HEAD") and detail.strip().lower() != commit:
+            return False, f"Pinned checkout verification failed: expected {commit}, got {detail.strip()}."
+    return True, f"Verified pinned commit {commit}."
 
 
 def _last30_plan() -> tuple[SuggestedInstallPlan | None, str | None]:
@@ -274,10 +274,15 @@ def _last30_plan() -> tuple[SuggestedInstallPlan | None, str | None]:
         _safe_destination(destination)
     except (OSError, ValueError) as exc:
         return None, f"{exc}. Manual instructions: {LAST30_URL}"
-    commands = ((os.path.abspath(git), "clone", "--depth", "1", LAST30_URL, "<temporary checkout>"),
+    commands = ((os.path.abspath(git), "init", "<temporary checkout>"),
+                (os.path.abspath(git), "-C", "<temporary checkout>", "remote", "add", "origin", LAST30_URL),
+                (os.path.abspath(git), "-C", "<temporary checkout>", "fetch", "--depth", "1", "origin", LAST30_COMMIT),
+                (os.path.abspath(git), "-C", "<temporary checkout>", "checkout", "--detach", LAST30_COMMIT),
+                (os.path.abspath(git), "-C", "<temporary checkout>", "rev-parse", "HEAD"),
                 ("copy", "<checkout>/skills/last30days", str(destination)))
-    details = (f"Installs the complete Last 30 Days skill directory user-wide. Requires Git; downloads the current upstream default branch from {LAST30_URL}. "
-               "The copied skill is not executed during installation.")
+    details = (f"Installs the complete Last 30 Days skill directory user-wide from selected commit {LAST30_COMMIT}. "
+               f"Requires Git; the installer verifies checkout HEAD before copying. Candidate pin, not claimed integration-tested. "
+               f"The copied skill is not executed. Upstream: {LAST30_URL}.")
     return SuggestedInstallPlan("last30days", "Last 30 Days research skill", destination, details, commands,
                                 data=(os.path.abspath(git),)), None
 
@@ -292,7 +297,7 @@ def _install_last30(plan: SuggestedInstallPlan) -> tuple[bool, str]:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="getonmylevel-last30-") as temp:
             checkout = Path(temp) / "checkout"
-            ok, detail = _clone(git, LAST30_URL, checkout)
+            ok, detail = _clone(git, LAST30_URL, LAST30_COMMIT, checkout)
             if not ok:
                 return False, detail
             source = checkout / "skills" / "last30days"
@@ -345,12 +350,16 @@ def _cli_plan(system: str | None = None) -> tuple[SuggestedInstallPlan | None, s
         return None, f"Automatic installation is unsupported on {system}. See {CLI_ANYTHING_URL}."
     if not shell:
         return None, f"Required shell for this platform was not found. Install manually: {CLI_ANYTHING_URL}"
-    command = (os.path.abspath(git), "clone", "--depth", "1", CLI_ANYTHING_URL, "<temporary checkout>")
+    command = (os.path.abspath(git), "init", "<temporary checkout>")
+    fetch_commands = ((os.path.abspath(git), "-C", "<temporary checkout>", "remote", "add", "origin", CLI_ANYTHING_URL),
+                      (os.path.abspath(git), "-C", "<temporary checkout>", "fetch", "--depth", "1", "origin", CLI_ANYTHING_COMMIT),
+                      (os.path.abspath(git), "-C", "<temporary checkout>", "checkout", "--detach", CLI_ANYTHING_COMMIT),
+                      (os.path.abspath(git), "-C", "<temporary checkout>", "rev-parse", "HEAD"))
     installer = (os.path.abspath(shell), *args)
     details = (f"Installs the CLI-Anything Codex generator skill and supporting resources user-wide; it does not install all application harnesses. "
-               f"Requires Git and the platform shell. Downloads the current upstream default branch from {CLI_ANYTHING_URL} and executes its installer with your privileges.")
+               f"Requires Git and the platform shell. Uses selected commit {CLI_ANYTHING_COMMIT} and verifies checkout HEAD before executing its installer with your privileges. Candidate pin, not claimed integration-tested. Upstream: {CLI_ANYTHING_URL}.")
     return SuggestedInstallPlan("cli_anything", "CLI-Anything Codex generator skill", destination, details,
-                                (command, installer), data=(os.path.abspath(git), os.path.abspath(shell), system)), None
+                                (command, *fetch_commands, installer), data=(os.path.abspath(git), os.path.abspath(shell), system)), None
 
 
 def _install_cli(plan: SuggestedInstallPlan) -> tuple[bool, str]:
@@ -362,7 +371,7 @@ def _install_cli(plan: SuggestedInstallPlan) -> tuple[bool, str]:
         _safe_destination(destination)
         with tempfile.TemporaryDirectory(prefix="getonmylevel-cli-anything-") as temp:
             checkout = Path(temp) / "checkout"
-            ok, detail = _clone(git, CLI_ANYTHING_URL, checkout)
+            ok, detail = _clone(git, CLI_ANYTHING_URL, CLI_ANYTHING_COMMIT, checkout)
             if not ok:
                 return False, detail
             _reject_linked_tree(checkout)

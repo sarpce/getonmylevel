@@ -118,7 +118,7 @@ class CodeGraphInstallTests(unittest.TestCase):
 
     def test_failed_package_install_does_not_configure_codex(self):
         plan = codegraph_installer.CodeGraphPlan(("node", "space path/codegraph.js"),
-                                                 ("node", "npm-cli.js", "install", "-g", codegraph_installer.PACKAGE),
+                                                 ("node", "npm-cli.js", "install", "-g", codegraph_installer.PINNED_PACKAGE),
                                                  "install")
         with patch.object(codegraph_installer, "_run", return_value=subprocess.CompletedProcess([], 1, "", "install failed")) as run:
             with self.assertRaisesRegex(RuntimeError, "status 1"):
@@ -139,6 +139,14 @@ class CodeGraphInstallTests(unittest.TestCase):
                                                  "missing")
         self.assertEqual(plan.commands, (plan.npm_install,
                                          (*plan.executable, *codegraph_installer.INSTALL_ARGS)))
+
+    def test_new_install_uses_exact_selected_package_version(self):
+        with patch.object(codegraph_installer.shutil, "which", return_value=None), \
+             patch.object(codegraph_installer, "_windows_node_npm", return_value=(Path("node"), Path("npm-cli.js"))), \
+             patch.object(codegraph_installer, "_prefix", return_value=Path("C:/npm")):
+            plan = codegraph_installer.plan_install()
+        self.assertIn(codegraph_installer.PINNED_PACKAGE, plan.npm_install)
+        self.assertIn(codegraph_installer.PINNED_PACKAGE, plan.details)
 
 
 if __name__ == "__main__":

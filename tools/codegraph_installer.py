@@ -11,6 +11,8 @@ import subprocess
 
 
 PACKAGE = "@colbymchenry/codegraph"
+PACKAGE_VERSION = "1.6.4"
+PINNED_PACKAGE = f"{PACKAGE}@{PACKAGE_VERSION}"
 def install_args(client: str = "codex") -> tuple[str, ...]:
     if client not in ("codex", "claude"):
         raise ValueError(f"Unsupported CodeGraph target: {client}")
@@ -95,13 +97,13 @@ def plan_install(client: str = "codex") -> CodeGraphPlan:
             executable = (str(node), str(cli))
         else:
             executable = (str(path),)
-        return CodeGraphPlan(executable, None, f"Existing CodeGraph command found at {path}; it will not be upgraded. Configure {_client_label(client)} globally.", client=client)
+        return CodeGraphPlan(executable, None, f"Existing CodeGraph command found at {path}; its version and provenance are unknown and unverified. It will not be upgraded. Configure {_client_label(client)} globally.", client=client)
 
     if os.name == "nt" or platform.system() == "Windows":
         node, npm_cli = _windows_node_npm()
         npm_prefix_command = (str(node), str(npm_cli))
         prefix = _prefix(npm_prefix_command)
-        npm_install = (*npm_prefix_command, "install", "-g", PACKAGE)
+        npm_install = (*npm_prefix_command, "install", "-g", PINNED_PACKAGE)
         installed_cli = _package_cli(prefix)
         executable = (str(node), str(installed_cli))
     else:
@@ -110,10 +112,10 @@ def plan_install(client: str = "codex") -> CodeGraphPlan:
             raise RuntimeError("Node.js and npm are required to install CodeGraph. Install Node.js, then reopen the installer.")
         npm_command = (str(Path(npm).resolve()),)
         prefix = _prefix(npm_command)
-        npm_install = (*npm_command, "install", "-g", PACKAGE)
+        npm_install = (*npm_command, "install", "-g", PINNED_PACKAGE)
         executable = (str(prefix / "bin" / "codegraph"),)
     return CodeGraphPlan(executable, npm_install,
-                         f"Install {PACKAGE} for this user, then configure {_client_label(client)} globally. No project will be initialized.", prefix, client)
+                         f"Install {PINNED_PACKAGE} for this user, then configure {_client_label(client)} globally. This is the selected package version; it is not claimed as integration-tested by this installer. No project will be initialized.", prefix, client)
 
 
 def _checked(command: tuple[str, ...]) -> str:

@@ -11,8 +11,18 @@ import subprocess
 
 
 PACKAGE = "@colbymchenry/codegraph"
-INSTALL_ARGS = ("install", "--target=codex", "--location=global", "--yes")
+def install_args(client: str = "codex") -> tuple[str, ...]:
+    if client not in ("codex", "claude"):
+        raise ValueError(f"Unsupported CodeGraph target: {client}")
+    return ("install", f"--target={client}", "--location=global", "--yes")
+
+
+INSTALL_ARGS = install_args()
 TIMEOUT_SECONDS = 900
+
+
+def _client_label(client: str) -> str:
+    return "Claude Code" if client == "claude" else "Codex"
 
 
 @dataclass(frozen=True)
@@ -21,10 +31,11 @@ class CodeGraphPlan:
     npm_install: tuple[str, ...] | None
     details: str
     prefix: Path | None = None
+    client: str = "codex"
 
     @property
     def commands(self) -> tuple[tuple[str, ...], ...]:
-        return tuple(command for command in (self.npm_install, self.executable and (*self.executable, *INSTALL_ARGS)) if command)
+        return tuple(command for command in (self.npm_install, self.executable and (*self.executable, *install_args(self.client))) if command)
 
 
 def _run(command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
@@ -70,8 +81,9 @@ def _package_cli(prefix: Path) -> Path:
     return legacy if legacy.is_file() and not current.is_file() else current
 
 
-def plan_install() -> CodeGraphPlan:
-    """Inspect prerequisites and construct a fixed, user-wide Codex plan."""
+def plan_install(client: str = "codex") -> CodeGraphPlan:
+    """Inspect prerequisites and construct a fixed, user-wide client plan."""
+    args = install_args(client)
     existing = shutil.which("codegraph")
     if existing:
         path = Path(existing).resolve()
@@ -83,7 +95,7 @@ def plan_install() -> CodeGraphPlan:
             executable = (str(node), str(cli))
         else:
             executable = (str(path),)
-        return CodeGraphPlan(executable, None, f"Existing CodeGraph command found at {path}; it will not be upgraded. Configure Codex globally.")
+        return CodeGraphPlan(executable, None, f"Existing CodeGraph command found at {path}; it will not be upgraded. Configure {_client_label(client)} globally.", client=client)
 
     if os.name == "nt" or platform.system() == "Windows":
         node, npm_cli = _windows_node_npm()
@@ -101,7 +113,7 @@ def plan_install() -> CodeGraphPlan:
         npm_install = (*npm_command, "install", "-g", PACKAGE)
         executable = (str(prefix / "bin" / "codegraph"),)
     return CodeGraphPlan(executable, npm_install,
-                         f"Install {PACKAGE} for this user, then configure Codex globally. No project will be initialized.", prefix)
+                         f"Install {PACKAGE} for this user, then configure {_client_label(client)} globally. No project will be initialized.", prefix, client)
 
 
 def _checked(command: tuple[str, ...]) -> str:
@@ -121,5 +133,6 @@ def install(plan: CodeGraphPlan) -> str:
     executable_path = Path(plan.executable[-1])
     if not executable_path.is_file():
         raise RuntimeError(f"CodeGraph CLI was not found after installation at {executable_path}. Package installation may have completed; Codex was not configured.")
-    _checked((*plan.executable, *INSTALL_ARGS))
-    return "CodeGraph is configured for Codex globally. No project was initialized. Restart Codex if the MCP server is not available."
+    _checked((*plan.executable, *install_args(plan.client)))
+    label = _client_label(plan.client)
+    return f"CodeGraph is configured for {label} globally. No project was initialized. Restart {label} if the MCP server is not available."

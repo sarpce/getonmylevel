@@ -1,4 +1,4 @@
-"""Configure optional getonmylevel Codex agent TOMLs with explicit approval."""
+"""Configure optional getonmylevel Codex agents or Claude Code subagents."""
 
 from __future__ import annotations
 
@@ -31,6 +31,9 @@ MAX_PAGES = 10
 MAX_MODELS = 1000
 MAX_SECONDS = 20
 MARKER = "# getonmylevel-managed-v1"
+CLAUDE_MARKER = "<!-- getonmylevel-managed-v1 -->"
+CLAUDE_MODELS = ("", "inherit", "sonnet", "opus", "haiku", "fable")
+CLAUDE_EFFORTS = ("", "low", "medium", "high", "xhigh", "max")
 
 
 def find_codex() -> str:
@@ -272,6 +275,60 @@ def render_agent(expected: dict[str, str], model: str, effort: str) -> str:
     return MARKER + "\n" + "\n".join(fields) + "\n"
 
 
+def _claude_yaml_string(value: str) -> str:
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise ValueError("Model and effort values cannot contain control characters.")
+    return json.dumps(value, ensure_ascii=False)
+
+
+def render_claude_agent(expected: dict[str, str], model: str, effort: str) -> str:
+    fields = [f"name: {_claude_yaml_string(expected['name'])}",
+              f"description: {_claude_yaml_string(expected['description'])}"]
+    if model:
+        fields.append(f"model: {_claude_yaml_string(model)}")
+    if effort:
+        fields.append(f"effort: {_claude_yaml_string(effort)}")
+    return "---\n" + "\n".join(fields) + "\n---\n" + CLAUDE_MARKER + "\n" + expected["developer_instructions"].rstrip() + "\n"
+
+
+def claude_expected(role: str, template: dict[str, str]) -> dict[str, str]:
+    return {**template, "name": f"getonmylevel-{role}"}
+
+
+def agent_filename(role: str, client: str) -> str:
+    if role not in common.AGENT_NAMES or client not in ("codex", "claude"):
+        raise ValueError("Unknown agent role or client.")
+    separator = "-" if client == "claude" else "_"
+    extension = "md" if client == "claude" else "toml"
+    return f"getonmylevel{separator}{role}.{extension}"
+
+
+def parse_claude_managed_file(path: Path, expected: dict[str, str]) -> tuple[str, str]:
+    if common.is_link_or_reparse(path):
+        raise ValueError(f"Refusing to update linked or reparse-point file: {path}")
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    if len(lines) < 6 or lines[0] != "---":
+        raise ValueError(f"Existing file is not a Claude Code agent managed by this tool: {path}")
+    try:
+        end = lines.index("---", 1)
+    except ValueError as exc:
+        raise ValueError(f"Claude agent frontmatter is malformed: {path}") from exc
+    fields = {}
+    for line in lines[1:end]:
+        match = re.fullmatch(r"(name|description|model|effort): (\"(?:[^\"\\]|\\.)*\")", line)
+        if not match or match.group(1) in fields:
+            raise ValueError(f"Claude agent frontmatter has unexpected or malformed fields: {path}")
+        fields[match.group(1)] = json.loads(match.group(2))
+    body = "\n".join(lines[end + 1:])
+    expected_body = CLAUDE_MARKER + "\n" + expected["developer_instructions"].rstrip()
+    if fields.get("name") != expected["name"] or fields.get("description") != expected["description"] or body != expected_body:
+        raise ValueError(f"Existing file was edited outside model/effort settings; refusing to replace: {path}")
+    if set(fields) - {"name", "description", "model", "effort"}:
+        raise ValueError(f"Existing file has unrecognized fields: {path}")
+    return fields.get("model", ""), fields.get("effort", "")
+
+
 def write_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path: Path | None = None
@@ -295,6 +352,8 @@ class AgentConfigurator:
             root.geometry("1000x780")
             root.minsize(760, 620)
         self.templates = load_templates()
+        self.client = tk.StringVar(value="codex")
+        self.client_values = {"codex": {}, "claude": {}}
         self.model_choices: dict[str, list[str]] = {}
         self.refresh_queue: queue.Queue[tuple[bool, Any]] = queue.Queue()
         self.scope_conflicts: dict[str, list[tuple[str, str]]] = {}
@@ -305,6 +364,13 @@ class AgentConfigurator:
         self.intro_label = ttk.Label(outer, text="Add focused helpers to Codex. Choose a role, then set its model and reasoning effort.",
                                      style="Muted.TLabel", wraplength=900)
         self.intro_label.pack(anchor="w", pady=(5, 16))
+
+        client_row = ttk.Frame(outer)
+        client_row.pack(fill="x", pady=(0, 8))
+        ttk.Label(client_row, text="Client:").pack(side="left")
+        for label, value in (("Codex", "codex"), ("Claude Code", "claude")):
+            ttk.Radiobutton(client_row, text=label, value=value, variable=self.client,
+                            command=self.client_changed).pack(side="left", padx=6)
 
         selector_row = ttk.Frame(outer)
         selector_row.pack(fill="x", pady=(0, 8))
@@ -359,13 +425,13 @@ class AgentConfigurator:
             description = ttk.Label(body, text=self.templates[role]["description"], style="CardMuted.TLabel",
                                     wraplength=280, justify="left")
             description.pack(anchor="w", fill="x", pady=(4, 10))
-            ttk.Label(body, text="Model · blank uses Codex default", style="CardMuted.TLabel").pack(anchor="w")
+            ttk.Label(body, text="Model · blank uses client default", style="CardMuted.TLabel").pack(anchor="w")
             model = ttk.Combobox(body, textvariable=self.model_vars[role], values=("",), width=24)
             model.pack(fill="x", pady=(3, 8))
             model.bind("<<ComboboxSelected>>", lambda _event, selected_role=role: self.model_changed(selected_role))
             model.bind("<FocusOut>", lambda _event, selected_role=role: self.refresh_preview())
             self.model_widgets[role] = model
-            ttk.Label(body, text="Reasoning effort · blank uses default", style="CardMuted.TLabel").pack(anchor="w")
+            ttk.Label(body, text="Effort · blank uses default", style="CardMuted.TLabel").pack(anchor="w")
             effort = ttk.Combobox(body, textvariable=self.effort_vars[role], values=("",), width=14)
             effort.pack(anchor="w", fill="x", pady=(3, 0))
             effort.bind("<<ComboboxSelected>>", lambda _event: self.refresh_preview())
@@ -442,7 +508,7 @@ class AgentConfigurator:
         if self.scope.get() in ("repo", "both") and not self.repo_path.get().strip():
             raise ValueError("Choose an existing target repository for repository scope.")
         repo = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
-        roots = common.agent_roots(self.scope.get(), repo)
+        roots = common.agent_roots(self.scope.get(), repo, self.client.get())
         if repo is not None and common.canonical(repo) == REPO_ROOT.resolve():
             raise ValueError("The target repository must differ from this source checkout.")
         return roots
@@ -472,14 +538,16 @@ class AgentConfigurator:
         for root in roots:
             common.check_managed_root(root)
             for role in roles:
-                path = root / f"getonmylevel_{role}.toml"
+                path = root / agent_filename(role, self.client.get())
                 if common.is_link_or_reparse(path):
                     raise ValueError(f"Refusing to update symlink: {path}")
                 model = self.model_vars[role].get().strip()
                 effort = self.effort_vars[role].get().strip()
+                expected = claude_expected(role, templates[role]) if self.client.get() == "claude" else templates[role]
                 if path.exists():
-                    parse_managed_file(path, templates[role])
-                entries.append((role, path, render_agent(templates[role], model, effort)))
+                    (parse_claude_managed_file if self.client.get() == "claude" else parse_managed_file)(path, expected)
+                renderer = render_claude_agent if self.client.get() == "claude" else render_agent
+                entries.append((role, path, renderer(expected, model, effort)))
         return roles, roots, templates, entries
 
     def scope_changed(self) -> None:
@@ -493,9 +561,11 @@ class AgentConfigurator:
             for role in common.AGENT_NAMES:
                 candidates = []
                 for root in roots:
-                    path = root / f"getonmylevel_{role}.toml"
+                    path = root / agent_filename(role, self.client.get())
                     if path.exists() and not path.is_symlink():
-                        candidates.append(parse_managed_file(path, self.templates[role]))
+                        parser = parse_claude_managed_file if self.client.get() == "claude" else parse_managed_file
+                        expected = claude_expected(role, self.templates[role]) if self.client.get() == "claude" else self.templates[role]
+                        candidates.append(parser(path, expected))
                 if candidates and len(set(candidates)) == 1:
                     model, effort = candidates[0]
                     self.model_vars[role].set(model)
@@ -507,6 +577,10 @@ class AgentConfigurator:
             pass
 
     def model_changed(self, role: str) -> None:
+        if self.client.get() == "claude":
+            self.effort_widgets[role]["values"] = CLAUDE_EFFORTS
+            self.refresh_preview()
+            return
         model_text = self.model_vars[role].get()
         selected_id = None
         for model_id, values in self.model_choices.items():
@@ -521,7 +595,30 @@ class AgentConfigurator:
                 self.effort_vars[role].set("")
         self.refresh_preview()
 
+    def client_changed(self) -> None:
+        previous = "claude" if self.client.get() == "codex" else "codex"
+        for role in common.AGENT_NAMES:
+            self.client_values[previous][role] = (self.model_vars[role].get(), self.effort_vars[role].get())
+        claude = self.client.get() == "claude"
+        self.intro_label.configure(text="Add focused helpers to Claude Code. Set each role’s model and effort, or leave them blank to inherit defaults." if claude else "Add focused helpers to Codex. Choose a role, then set its model and reasoning effort.")
+        self.refresh_button.configure(text="Claude Code models are entered manually" if claude else "Refresh available models from Codex...")
+        self.refresh_button.configure(state="disabled" if claude else "normal")
+        self.refresh_status.set("Claude Code has no local model discovery here. Suggested aliases are shown; enter any model ID supported by your account." if claude else "Model discovery is optional. You can enter values manually.")
+        for role in common.AGENT_NAMES:
+            model, effort = self.client_values[self.client.get()].get(role, ("", ""))
+            self.model_vars[role].set(model)
+            self.effort_vars[role].set(effort)
+            if claude:
+                self.model_widgets[role]["values"] = CLAUDE_MODELS
+                self.effort_widgets[role]["values"] = CLAUDE_EFFORTS
+            else:
+                self.model_widgets[role]["values"] = [""] + [details[0] for details in self.model_choices.values()]
+                self.effort_widgets[role]["values"] = [""] + list(dict.fromkeys(e for values in self.model_choices.values() for e in values[1:]))
+        self.scope_changed()
+
     def refresh_models(self) -> None:
+        if self.client.get() == "claude":
+            return
         self.refresh_button.configure(state="disabled")
         self.refresh_status.set("Querying the local Codex app-server…")
         def worker() -> None:
@@ -562,11 +659,11 @@ class AgentConfigurator:
             roles = self.selected_roles()
             roots = self.selected_roots()
             lines = [f"Selected roles: {', '.join(roles) if roles else '(none selected)'}", "Destinations:"]
-            lines.extend(f"  {root / f'getonmylevel_{role}.toml'}" for root in roots for role in roles)
+            lines.extend(f"  {root / agent_filename(role, self.client.get())}" for root in roots for role in roles)
             if roles:
-                lines.append("\nModel and effort (blank means inherit Codex defaults):")
+                lines.append("\nModel and effort (blank means inherit client defaults):")
                 lines.extend(f"  {role}: model={self.model_vars[role].get() or '(inherit)'}, effort={self.effort_vars[role].get() or '(inherit)'}" for role in roles)
-            lines.append("\nExisting files are updated only when their marker and template text match exactly. No AGENTS.md or Codex config is edited.")
+            lines.append("\nExisting files are updated only when their marker and template text match exactly. No instruction file or client config is edited.")
             for role in roles:
                 if role in self.scope_conflicts:
                     lines.append(f"Warning: existing values differ for {role}: {self.scope_conflicts[role]!r}. Choose values explicitly to unify them.")
@@ -589,7 +686,8 @@ class AgentConfigurator:
                 if common.is_link_or_reparse(path):
                     raise ValueError(f"Refusing linked or reparse-point destination path: {path}")
                 if path.exists():
-                    parse_managed_file(path, templates[_role])
+                    expected = claude_expected(_role, templates[_role]) if self.client.get() == "claude" else templates[_role]
+                    (parse_claude_managed_file if self.client.get() == "claude" else parse_managed_file)(path, expected)
                 write_atomic(path, content)
                 written.append(str(path))
             messagebox.showinfo("Configuration complete", "Written:\n" + "\n".join(written))

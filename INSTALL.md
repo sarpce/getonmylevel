@@ -1,19 +1,19 @@
 # getonmylevel
 
-Five independently installable Codex skills for communication, project context, engineering workflow, interface design, and good software engineering practices, plus optional role-agent templates and local setup tools.
+Six independently installable skills for Codex or Claude Code, plus optional role-agent templates and local setup tools.
 
 ## Prerequisites
 
 - Git to clone this repository.
 - Python 3.11 or newer for the setup tools. They use the standard library; the graphical tools also require a Python build with Tkinter.
-- A Codex client supporting local skills and custom agents. See the official [skills documentation](https://developers.openai.com/codex/skills), [AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md), and [multi-agent documentation](https://developers.openai.com/codex/multi-agent).
+- Codex or Claude Code for client-native discovery. See the [Codex skills documentation](https://developers.openai.com/codex/skills) and the [Claude Code skills](https://code.claude.com/docs/en/skills), [subagents](https://code.claude.com/docs/en/sub-agents), and [memory](https://code.claude.com/docs/en/memory) documentation.
 
 ```sh
 git clone https://github.com/sarpce/getonmylevel.git
 cd getonmylevel
 ```
 
-The installer integrates selected skills into the applicable Codex instruction file by adding a managed block that tells Codex to read them by default when relevant. This is a natural-language preference: instruction precedence, client behavior, file-size limits, and skill availability still govern activation. Skill installation itself does not change Codex settings. Selecting the context skill also selects CodeGraph as a required installer dependency; CodeGraph remains optional when context is not selected.
+Choose Codex or Claude Code in the installer. It integrates selected skills into the selected client's instruction file with a managed block that asks the client to read them by default when relevant. This natural-language preference remains subject to instruction precedence, client behavior, file-size limits, and skill availability. Skill installation itself does not change client settings. Selecting the context skill automatically selects CodeGraph for Codex; for Claude Code, CodeGraph remains an optional user-wide dependency.
 
 ## Install skills
 
@@ -25,7 +25,9 @@ python tools/install_gui.py
 
 Select one or more skills and a scope: **User-wide**, **Target repository**, or **Both**. For repository scope, choose an existing target repository. The preview shows skill and instruction actions. The installer uses the skill files in this checkout; it does not download a release. After confirmation, an existing skill directory is replaced with the checked-out version, and its previous contents (including local edits) are kept under `getonmylevel-backups` beside the skills directory. Existing files, symlinks, junctions, and other detected reparse points are refused as skill destinations, as are linked or invalid managed paths. An I/O error during a multi-skill operation can leave earlier completed copies in place; the tool reports completed changes and backup paths.
 
-User-wide skills go to `$HOME/.agents/skills`; their managed instructions go in `$CODEX_HOME/AGENTS.md` when `CODEX_HOME` is set, otherwise `~/.codex/AGENTS.md`. Repository skills go to `<target-repository>/.agents/skills`; their instructions go in that repository's `AGENTS.md`. An existing nonempty `AGENTS.override.md` is used in preference to `AGENTS.md`; an empty override is left untouched and `AGENTS.md` is used. If the override later becomes nonempty, it takes precedence. Installing in both places may cause duplicate skill discovery; usually choose one. The built-in `$skill-installer` uses `$CODEX_HOME/skills`; locations may differ by client. Follow current [Codex skills documentation](https://developers.openai.com/codex/skills) and [AGENTS.md guide](https://developers.openai.com/codex/guides/agents-md). Restart Codex if a skill is not discovered, then start a new conversation to load changed instructions.
+Codex user-wide skills go to `$HOME/.agents/skills`; their instructions go in `$CODEX_HOME/AGENTS.md` when `CODEX_HOME` is set, otherwise `~/.codex/AGENTS.md`. Repository skills go to `<repo>/.agents/skills` and their instructions to `AGENTS.md` (a nonempty `AGENTS.override.md` takes precedence). Claude Code user skills go to `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when set; instructions go in the matching `CLAUDE.md`. Repository Claude skills go to `<repo>/.claude/skills`, with instructions in `<repo>/CLAUDE.md`. Installing in both scopes may cause duplicate skill discovery; usually choose one. Restart or start a new conversation if the client does not discover the new skills or instructions.
+
+In **Agents**, Codex roles use the existing TOML format and local Codex model discovery. Claude Code roles use native Markdown subagent files. Model and effort fields are editable for each role; Claude offers common aliases as suggestions and also accepts full model IDs. A selected ID does not guarantee account access or model availability. The suggested RTK, Last 30 Days, and CLI-Anything installers are Codex-only and are disabled when Claude Code is selected. CodeGraph can be configured for either client.
 
 The managed block preserves surrounding instruction text. Later installs add newly selected skill names to the existing block; deselecting a skill does not remove it. Malformed or manually edited managed blocks are refused for manual repair. To turn off the default preference, remove the exact region beginning `<!-- getonmylevel-skills:begin -->` and ending `<!-- getonmylevel-skills:end -->`; this leaves installed skill directories in place. Instructions are subject to higher-priority guidance and Codex's `project_doc_max_bytes` limit, so a large instruction file may prevent the block from being read.
 
@@ -43,7 +45,7 @@ The confirmation shows planned commands/actions, destinations, prerequisites, ne
 
 ### Terminal fallback
 
-The same selection is available without Tkinter for **new installations only**. Existing skill destinations are refused to prevent overwriting them. To update an existing installation with a backup of its current contents, use the graphical installer above. Run the terminal commands from this repository root and edit the exact allowlisted names, scopes, and repository root. The script preflights selected source files and every destination, including symlinks, before it creates directories or copies files. The terminal fallback only copies skills; add equivalent default-use instructions to the applicable `AGENTS.md` yourself, or use the GUI installer for integrated instructions.
+The terminal fallback supports **Codex only** and new installations only. Existing skill destinations are refused to prevent overwriting them. To install for Claude Code or update an existing installation with a backup of its current contents, use the graphical installer above. Run the Codex terminal commands from this repository root and edit the exact allowlisted names, scopes, and repository root. The script preflights selected source files and every destination, including symlinks, before it creates directories or copies files. The terminal fallback only copies skills; add equivalent default-use instructions to the applicable `AGENTS.md` yourself, or use the GUI installer for integrated instructions.
 
 PowerShell:
 

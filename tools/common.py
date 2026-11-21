@@ -81,12 +81,12 @@ def is_link_or_reparse(path: Path) -> bool:
 
 
 def check_managed_root(root: Path) -> None:
-    """Reject linked/reparse points at the selected base and Codex-managed path segments."""
+    """Reject linked/reparse points at the selected base and managed path segments."""
     expanded = root.expanduser()
-    if expanded.parent.name in (".agents", ".codex"):
+    if expanded.parent.name in (".agents", ".codex", ".claude"):
         base = expanded.parent.parent
         managed = (expanded.parent, expanded)
-    elif expanded.name == "agents":
+    elif expanded.name in ("agents", "skills"):
         base = expanded.parent
         managed = (expanded,)
     else:
@@ -257,28 +257,40 @@ def copy_skills(copies: Iterable[SkillCopy]) -> SkillCopyResult:
     return SkillCopyResult(tuple(installed), tuple(updated), tuple(backups))
 
 
-def skill_roots(scope: str, repo_root: Path | None) -> list[Path]:
+def skill_roots(scope: str, repo_root: Path | None, client: str = "codex") -> list[Path]:
+    if client not in ("codex", "claude"):
+        raise ValueError(f"Unknown client: {client}")
+    home = ".agents" if client == "codex" else ".claude"
     roots: list[Path] = []
     if scope in ("user", "both"):
-        roots.append(Path.home() / ".agents" / "skills")
+        user_root = Path.home()
+        if client == "claude" and os.environ.get("CLAUDE_CONFIG_DIR"):
+            user_root = Path(os.environ["CLAUDE_CONFIG_DIR"]).expanduser()
+        roots.append(user_root / home / "skills" if client == "codex" or not os.environ.get("CLAUDE_CONFIG_DIR") else user_root / "skills")
     if scope in ("repo", "both"):
         if repo_root is None or not repo_root.is_dir():
             raise ValueError("Choose an existing target repository for repository scope.")
-        roots.append(repo_root / ".agents" / "skills")
+        roots.append(repo_root / home / "skills")
     if scope not in ("user", "repo", "both"):
         raise ValueError(f"Unknown installation scope: {scope}")
     return validate_roots(roots)
 
 
-def agent_roots(scope: str, repo_root: Path | None) -> list[Path]:
+def agent_roots(scope: str, repo_root: Path | None, client: str = "codex") -> list[Path]:
+    if client not in ("codex", "claude"):
+        raise ValueError(f"Unknown client: {client}")
     roots: list[Path] = []
     if scope in ("global", "both"):
-        codex_home = os.environ.get("CODEX_HOME")
-        roots.append((Path(codex_home).expanduser() if codex_home else Path.home() / ".codex") / "agents")
+        if client == "claude":
+            config_home = os.environ.get("CLAUDE_CONFIG_DIR")
+            roots.append((Path(config_home).expanduser() if config_home else Path.home() / ".claude") / "agents")
+        else:
+            codex_home = os.environ.get("CODEX_HOME")
+            roots.append((Path(codex_home).expanduser() if codex_home else Path.home() / ".codex") / "agents")
     if scope in ("repo", "both"):
         if repo_root is None or not repo_root.is_dir():
             raise ValueError("Choose an existing target repository for repository scope.")
-        roots.append(repo_root / ".codex" / "agents")
+        roots.append(repo_root / (".claude" if client == "claude" else ".codex") / "agents")
     if scope not in ("global", "repo", "both"):
         raise ValueError(f"Unknown agent configuration scope: {scope}")
     return validate_roots(roots)

@@ -31,16 +31,17 @@ SKILL_DESCRIPTIONS = {
 }
 
 
-def perform_install(copies, instruction_plans):
+def perform_install(copies, instruction_plans, client="codex"):
     """Copy skills before writing their default-use instructions."""
     result = common.copy_skills(copies)
-    written = instruction_integration.write_instruction_updates(instruction_plans)
+    written = instruction_integration.write_instruction_updates(instruction_plans, client)
     return result, written
 
 
 class Installer:
     def __init__(self, root: tk.Tk, parent=None, configure_window: bool = True) -> None:
         self.root = root
+        self.client = tk.StringVar(value="codex")
         if configure_window:
             root.title("getonmylevel · Skills and agents")
             root.geometry("1000x780")
@@ -48,10 +49,19 @@ class Installer:
 
         outer = ttk.Frame(parent or root, padding=18)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Skills for Codex", font=("Segoe UI", 20, "bold")).pack(anchor="w")
+        ttk.Label(outer, text="Skills and tools", font=("Segoe UI", 20, "bold")).pack(anchor="w")
         self.intro_label = ttk.Label(outer, text="Choose the capabilities you want to add. Review every destination before applying changes.",
                                      style="Muted.TLabel", wraplength=900)
         self.intro_label.pack(anchor="w", pady=(5, 16))
+        client_row = ttk.Frame(outer)
+        client_row.pack(fill="x", pady=(0, 8))
+        ttk.Label(client_row, text="Client:").pack(side="left")
+        self.client_buttons = []
+        for label, value in (("Codex", "codex"), ("Claude Code", "claude")):
+            button = ttk.Radiobutton(client_row, text=label, value=value, variable=self.client,
+                                     command=self.client_changed)
+            button.pack(side="left", padx=6)
+            self.client_buttons.append(button)
 
         ttk.Label(outer, text="Core skills", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 8))
         self.skills_grid = ttk.Frame(outer)
@@ -93,15 +103,17 @@ class Installer:
         codegraph_card = ttk.LabelFrame(outer, text="Optional project context dependency", style="Card.TLabelframe")
         codegraph_card.pack(fill="x", pady=(12, 0))
         self.codegraph_selected = tk.BooleanVar(value=False)
+        self.codegraph_by_client = {"codex": False, "claude": False}
         codegraph_row = ttk.Frame(codegraph_card, style="Card.TFrame")
         codegraph_row.pack(fill="x")
         self.codegraph_marker = ttk.Label(codegraph_row, text="○", style="CardMarker.TLabel", width=2, anchor="center")
         self.codegraph_marker.pack(side="left", padx=(0, 4))
-        self.codegraph_check = ttk.Checkbutton(codegraph_row, text="CodeGraph · global Codex integration",
+        self.codegraph_check = ttk.Checkbutton(codegraph_row, text="CodeGraph · global client integration",
                                                variable=self.codegraph_selected, command=self.refresh_preview,
                                                style="Card.TCheckbutton")
         self.codegraph_check.pack(side="left", anchor="w")
         self.codegraph_selected.trace_add("write", self.update_codegraph_marker)
+        self.codegraph_selected.trace_add("write", self.remember_codegraph_selection)
         self.codegraph_description = ttk.Label(codegraph_card, text="Selected automatically with the project context skill. Installs and configures the global dependency after confirmation.",
                                                style="CardMuted.TLabel", wraplength=600)
         self.codegraph_description.pack(anchor="w", padx=(26, 0), pady=(2, 0))
@@ -121,7 +133,7 @@ class Installer:
 
         suggested_box = ttk.LabelFrame(outer, text="Suggested skillsets and tools", padding=8)
         suggested_box.pack(fill="x", pady=(10, 0))
-        self.suggested_description = ttk.Label(suggested_box, text="Optional user-wide skills and tools. Installed items can be removed from detected locations; RTK is detected on PATH.",
+        self.suggested_description = ttk.Label(suggested_box, text="Optional user-wide Codex skills and tools. These suggested installers do not configure Claude Code.",
                                                wraplength=600, style="Muted.TLabel")
         self.suggested_description.pack(anchor="w")
         self.suggested_selected = {item.id: tk.BooleanVar(value=False) for item in suggested_installers.SUGGESTED_ITEMS}
@@ -168,6 +180,10 @@ class Installer:
             root.protocol("WM_DELETE_WINDOW", self.close)
         self.context_selection_changed()
 
+    def selected_client(self) -> str:
+        client = getattr(self, "client", None)
+        return client.get() if client is not None else "codex"
+
     def update_skill_card(self, name: str) -> None:
         card = self.skill_cards[name]
         selected = self.selected[name].get()
@@ -191,6 +207,9 @@ class Installer:
         self.codegraph_marker.configure(text="✓" if selected else "○",
                                         style="Selected.CardMarker.TLabel" if selected else "CardMarker.TLabel")
 
+    def remember_codegraph_selection(self, *_args) -> None:
+        self.codegraph_by_client[self.client.get()] = self.codegraph_selected.get()
+
     def reflow_skill_cards(self, event=None) -> None:
         width = event.width if event is not None else self.skills_grid.winfo_width()
         columns = 3 if width >= 740 else 2 if width >= 480 else 1
@@ -209,11 +228,24 @@ class Installer:
             self.skill_card_descriptions[name].configure(wraplength=max(180, card_width - 36))
 
     def context_selection_changed(self, *_args) -> None:
-        if self.selected["getonmylevel-context"].get():
+        if self.selected["getonmylevel-context"].get() and self.client.get() == "codex":
             self.codegraph_selected.set(True)
             self.codegraph_check.configure(state="disabled")
         else:
             self.codegraph_check.configure(state="normal")
+        self.refresh_preview()
+
+    def client_changed(self) -> None:
+        claude = self.client.get() == "claude"
+        self.codegraph_selected.set(self.codegraph_by_client[self.client.get()])
+        self.codegraph_description.configure(text=("Optional user-wide dependency for Claude Code. Install and configure only after reviewing the preview." if claude else "Selected automatically with the project context skill. Installs and configures the global Codex dependency after confirmation."))
+        self.codegraph_check.configure(state="normal")
+        for check in self.suggested_checks:
+            check.configure(state="disabled" if claude else "normal")
+        self.suggested_button.configure(state="disabled" if claude else "normal")
+        self.suggested_refresh_button.configure(state="disabled" if claude else "normal")
+        self.context_selection_changed()
+        self.codegraph_check.configure(state=("disabled" if self.client.get() == "codex" and self.selected["getonmylevel-context"].get() else "normal"))
         self.refresh_preview()
 
     def close(self) -> None:
@@ -370,6 +402,7 @@ class Installer:
             self.refresh_preview()
 
     def selections(self):
+        client = self.selected_client()
         names = [name for name, var in self.selected.items() if var.get()]
         wants_codegraph = getattr(self, "codegraph_selected", None)
         wants_codegraph = wants_codegraph.get() if wants_codegraph is not None else False
@@ -382,10 +415,10 @@ class Installer:
             repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
             if repo_root is not None and common.canonical(repo_root) == SOURCE_REPO:
                 raise ValueError("The target repository must differ from this source checkout.")
-            roots = common.skill_roots(self.scope.get(), repo_root)
+            roots = common.skill_roots(self.scope.get(), repo_root, client)
             copies = common.preflight_skill_copy(SOURCE_ROOT, names, roots)
-            instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names)
-        codegraph_plan = codegraph_installer.plan_install() if wants_codegraph else None
+            instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names, client)
+        codegraph_plan = codegraph_installer.plan_install(client) if wants_codegraph else None
         return names, roots, copies, instruction_plans, codegraph_plan
 
     def remove_instructions(self) -> None:
@@ -395,7 +428,7 @@ class Installer:
             repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
             if repo_root is not None and common.canonical(repo_root) == SOURCE_REPO:
                 raise ValueError("The target repository must differ from this source checkout.")
-            plans = instruction_integration.plan_instruction_removals(self.scope.get(), repo_root)
+            plans = instruction_integration.plan_instruction_removals(self.scope.get(), repo_root, self.selected_client())
             if not plans:
                 messagebox.showinfo("Instructions already clear", "No getonmylevel-managed instruction blocks were found in the selected scope.")
                 return
@@ -404,7 +437,7 @@ class Installer:
                             f"{paths}\n\nOther instructions and installed skill files will remain.")
             if not messagebox.askyesno("Confirm instruction removal", confirmation):
                 return
-            written = instruction_integration.write_instruction_removals(plans)
+            written = instruction_integration.write_instruction_removals(plans, self.selected_client())
             self.refresh_preview()
             messagebox.showinfo("Instructions removed", "Removed managed instructions from:\n" + "\n".join(map(str, written)))
         except (OSError, ValueError) as exc:
@@ -418,6 +451,7 @@ class Installer:
 
     def refresh_preview(self) -> None:
         try:
+            client = self.selected_client()
             names = [name for name, var in self.selected.items() if var.get()]
             wants_codegraph = getattr(self, "codegraph_selected", None)
             wants_codegraph = wants_codegraph.get() if wants_codegraph is not None else False
@@ -427,23 +461,25 @@ class Installer:
                 if self.scope.get() in ("repo", "both") and not self.repo_path.get().strip():
                     raise ValueError("Choose an existing target repository for repository scope.")
                 repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
-                roots = common.skill_roots(self.scope.get(), repo_root)
+                roots = common.skill_roots(self.scope.get(), repo_root, client)
             plan = common.preflight_skill_copy(SOURCE_ROOT, names, roots) if names else []
-            instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names) if names else []
+            instruction_plans = instruction_integration.plan_instruction_updates(self.scope.get(), repo_root, names, client) if names else []
             lines = [f"Skills: {', '.join(names) if names else '(none selected)'}", "Actions:"]
             lines.extend(f"  {'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in plan)
             if any(operation.is_update for operation in plan):
                 lines.append("\nUpdates replace the selected skill directory. Its previous contents are preserved in a backup.")
             lines.append("\nThe checked-out skill files are the versions this installer installs.")
             if instruction_plans:
-                lines.append("\nCodex default-use instructions (existing text is preserved):")
+                client_name = "Claude Code" if self.selected_client() == "claude" else "Codex"
+                lines.append(f"\n{client_name} default-use instructions (existing text is preserved):")
                 lines.extend(f"  {item.action}: {item.path}" for item in instruction_plans)
-                lines.append("The managed instruction asks Codex to read these skills by default when relevant. A new conversation may be needed; higher-priority instructions still apply.")
+                lines.append(f"The managed instruction asks {client_name} to read these skills by default when relevant. A new conversation may be needed; higher-priority instructions still apply.")
             if wants_codegraph:
-                codegraph_plan = codegraph_installer.plan_install()
+                codegraph_plan = codegraph_installer.plan_install(self.selected_client())
+                client_name = "Claude Code" if self.selected_client() == "claude" else "Codex"
                 lines.extend(["", "CodeGraph: optional user-wide external dependency", codegraph_plan.details,
-                              "  Configure Codex globally: codegraph install --target=codex --location=global --yes",
-                              "  No project indexing or initialization will run. Restart Codex if needed."])
+                              f"  Configure {client_name} globally: codegraph install --target={self.selected_client()} --location=global --yes",
+                              f"  No project indexing or initialization will run. Restart {client_name} if needed."])
                 if codegraph_plan.npm_install:
                     lines.append("  Planned package install: npm install -g @colbymchenry/codegraph")
             if not names and not wants_codegraph:
@@ -469,20 +505,22 @@ class Installer:
             confirmation = "Use the skill versions in this checkout?\n\n" + "\n".join(actions)
             if any(operation.is_update for operation in copies):
                 confirmation += "\n\nUpdates replace selected directories and preserve their previous contents in backups."
-            confirmation += "\n\nCodex will be instructed to read these skills by default when relevant. Existing instruction text is preserved. A new conversation may be needed; higher-priority instructions still apply."
+            client = self.selected_client()
+            client_name = "Claude Code" if client == "claude" else "Codex"
+            confirmation += f"\n\n{client_name} will be instructed to read these skills by default when relevant. Existing instruction text is preserved. A new conversation may be needed; higher-priority instructions still apply."
             if codegraph_plan:
-                confirmation += ("\n\nCodeGraph is an optional user-wide external dependency. It may download packages and will configure Codex globally, including Codex MCP configuration and managed instructions. "
-                                 "No project will be initialized or indexed. Restart Codex if needed.\n\n" + codegraph_plan.details +
+                confirmation += (f"\n\nCodeGraph is an optional user-wide external dependency. It may download packages and will configure {client_name} globally, including its MCP configuration and managed instructions. "
+                                 f"No project will be initialized or indexed. Restart {client_name} if needed.\n\n" + codegraph_plan.details +
                                  "\nCommands/actions:\n" + "\n".join("  " + " ".join(command) for command in codegraph_plan.commands))
             if not messagebox.askyesno("Confirm installation or update", confirmation):
                 return
-            self.start_install_worker(names, copies, instruction_plans, codegraph_plan)
+            self.start_install_worker(names, copies, instruction_plans, codegraph_plan, client)
         except (OSError, ValueError, RuntimeError) as exc:
             self.show_install_error(exc, locals().get("instruction_plans"))
 
-    def start_install_worker(self, names, copies, instruction_plans, codegraph_plan) -> None:
+    def start_install_worker(self, names, copies, instruction_plans, codegraph_plan, client) -> None:
         self.install_busy = True
-        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, self.codegraph_check, *self.skill_checks):
+        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, self.codegraph_check, *self.client_buttons, *self.skill_checks):
             widget.configure(state="disabled")
         self.install_status = tk.Toplevel(self.root)
         self.install_status.title("Installing selected components")
@@ -494,7 +532,7 @@ class Installer:
         def worker() -> None:
             skill_stage_complete = False
             try:
-                result, written = perform_install(copies, instruction_plans) if names else (common.SkillCopyResult((), (), ()), [])
+                result, written = perform_install(copies, instruction_plans, client) if names else (common.SkillCopyResult((), (), ()), [])
                 skill_stage_complete = True
                 codegraph_result = codegraph_installer.install(codegraph_plan) if codegraph_plan else None
                 sections = []
@@ -536,9 +574,12 @@ class Installer:
 
     def finish_install_worker(self) -> None:
         self.install_busy = False
-        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, *self.skill_checks):
+        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, *self.client_buttons, *self.skill_checks):
             widget.configure(state="normal")
         self.context_selection_changed()
+        claude = self.client.get() == "claude"
+        self.suggested_button.configure(state="disabled" if claude else "normal")
+        self.suggested_refresh_button.configure(state="disabled" if claude else "normal")
 
     def poll_install_result(self) -> None:
         try:

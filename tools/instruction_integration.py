@@ -30,11 +30,14 @@ class InstructionWriteError(OSError):
         super().__init__(f"Could not update instruction file {path}: {cause}")
 
 
-def _instruction_roots(scope: str, repo_root: Path | None) -> list[tuple[str, Path]]:
+def _instruction_roots(scope: str, repo_root: Path | None, client: str = "codex") -> list[tuple[str, Path]]:
+    if client not in ("codex", "claude"):
+        raise ValueError(f"Unknown client: {client}")
     roots: list[tuple[str, Path]] = []
     if scope in ("user", "both"):
-        codex_home = os.environ.get("CODEX_HOME")
-        roots.append(("user", (Path(codex_home).expanduser() if codex_home else Path.home() / ".codex")))
+        config = os.environ.get("CLAUDE_CONFIG_DIR") if client == "claude" else os.environ.get("CODEX_HOME")
+        default = ".claude" if client == "claude" else ".codex"
+        roots.append(("user", Path(config).expanduser() if config else Path.home() / default))
     if scope in ("repo", "both"):
         if repo_root is None or not repo_root.is_dir():
             raise ValueError("Choose an existing target repository for repository scope.")
@@ -44,15 +47,15 @@ def _instruction_roots(scope: str, repo_root: Path | None) -> list[tuple[str, Pa
     return roots
 
 
-def _instruction_path(root: Path) -> Path:
+def _instruction_path(root: Path, client: str = "codex") -> Path:
     common.check_managed_root(root / "agents")
     expanded_root = root.expanduser()
     for candidate in (expanded_root, *expanded_root.parents):
         if common.is_link_or_reparse(candidate):
             raise ValueError(f"Refusing linked or reparse-point managed instruction root: {candidate}")
-    override = root / "AGENTS.override.md"
-    regular = root / "AGENTS.md"
-    for candidate in (override, regular):
+    filenames = ("CLAUDE.md",) if client == "claude" else ("AGENTS.override.md", "AGENTS.md")
+    candidates = [root / name for name in filenames]
+    for candidate in candidates:
         if common.is_link_or_reparse(candidate):
             raise ValueError(f"Refusing linked or reparse-point instruction file: {candidate}")
         if candidate.exists():
@@ -60,26 +63,30 @@ def _instruction_path(root: Path) -> Path:
                 raise ValueError(f"Instruction path is not a regular file: {candidate}")
             if candidate.stat().st_size:
                 return candidate
-    return regular
+    return candidates[-1]
 
 
-def _block(names: list[str], kind: str, newline: str) -> str:
+def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+    if client not in ("codex", "claude"):
+        raise ValueError(f"Unknown client: {client}")
+    folder = ".claude" if client == "claude" else ".agents"
     if kind == "user":
-        paths = [f"~/.agents/skills/{name}/SKILL.md" for name in names]
+        user_root = os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude" if client == "claude" else "~/.agents"
+        paths = [f"{user_root}/skills/{name}/SKILL.md" for name in names]
         location_note = ""
     else:
-        paths = [f".agents/skills/{name}/SKILL.md" for name in names]
+        paths = [f"{folder}/skills/{name}/SKILL.md" for name in names]
         location_note = "These paths are relative to the repository root.\n"
     lines = [BEGIN, "## getonmylevel skills", "",
              "By default, at the start of each conversation, read the following installed skill instructions and follow them as relevant to the task:",
              *[f"- `{path}`" for path in paths],
              "", location_note.rstrip("\n") if location_note else None,
-             ("For each task, review the available skills and relevant skill locations (including `.agents/skills`, `.codex/skills`, and `.skills` where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions." if "getonmylevel-skill-discovery" in names else None),
+             (("For each task, review the available skills and relevant skill locations (including `.agents/skills`, `.codex/skills`, and `.skills` where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions." if client == "codex" else f"For each task, review the available skills and relevant skill locations (including `{folder}/skills`, `.skills`, and client-specific locations where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions.") if "getonmylevel-skill-discovery" in names else None),
              "Honor explicit user changes to this preference and higher-priority instructions.", END]
     return newline.join(line for line in lines if line is not None)
 
 
-def _parse_block(text: str, kind: str, newline: str) -> list[str] | None:
+def _parse_block(text: str, kind: str, newline: str, client: str = "codex") -> list[str] | None:
     if BEGIN not in text and END not in text:
         return None
     if text.count(BEGIN) != 1 or text.count(END) != 1:
@@ -91,7 +98,9 @@ def _parse_block(text: str, kind: str, newline: str) -> list[str] | None:
     end_after = finish + len(END)
     body = text[start:end_after]
     names: list[str] = []
-    prefix = "~/.agents/skills/" if kind == "user" else ".agents/skills/"
+    folder = ".claude" if client == "claude" else ".agents"
+    user_root = os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude" if client == "claude" else "~/.agents"
+    prefix = f"{user_root}/skills/" if kind == "user" else f"{folder}/skills/"
     suffix = "/SKILL.md`"
     for line in body.split(newline):
         if line.startswith("- `") and line.endswith(suffix):
@@ -102,22 +111,22 @@ def _parse_block(text: str, kind: str, newline: str) -> list[str] | None:
             if name not in common.SKILL_NAMES or name in names:
                 raise ValueError(f"Managed skill instruction block has an unknown or duplicate skill: {name!r}.")
             names.append(name)
-    if not names or body != _block(names, kind, newline):
+    if not names or body != _block(names, kind, newline, client):
         raise ValueError("Managed skill instruction block was edited or is malformed; repair or remove it manually.")
     return names
 
 
-def _updated_bytes(original: bytes | None, kind: str, selected: list[str]) -> tuple[bytes, str]:
+def _updated_bytes(original: bytes | None, kind: str, selected: list[str], client: str = "codex") -> tuple[bytes, str]:
     bom = b"\xef\xbb\xbf" if original and original.startswith(b"\xef\xbb\xbf") else b""
     raw = original[len(bom):] if original else b""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise ValueError("Codex instruction file must be valid UTF-8 to preserve it safely.") from exc
+        raise ValueError("Instruction file must be valid UTF-8 to preserve it safely.") from exc
     newline = "\r\n" if "\r\n" in text else "\n"
-    existing = _parse_block(text, kind, newline)
+    existing = _parse_block(text, kind, newline, client)
     names = [name for name in common.SKILL_NAMES if name in set((existing or []) + selected)]
-    block = _block(names, kind, newline)
+    block = _block(names, kind, newline, client)
     if existing is not None:
         start, finish = text.index(BEGIN), text.index(END) + len(END)
         proposed_text = text[:start] + block + text[finish:]
@@ -132,25 +141,25 @@ def _updated_bytes(original: bytes | None, kind: str, selected: list[str]) -> tu
     return bom + proposed_text.encode("utf-8"), "Create" if original is None else "Update"
 
 
-def plan_instruction_updates(scope: str, repo_root: Path | None, names: list[str]) -> list[InstructionUpdate]:
+def plan_instruction_updates(scope: str, repo_root: Path | None, names: list[str], client: str = "codex") -> list[InstructionUpdate]:
     selected = common.validate_selection(names, common.SKILL_NAMES, "skill")
     plans: list[InstructionUpdate] = []
-    for kind, root in _instruction_roots(scope, repo_root):
-        path = _instruction_path(root)
+    for kind, root in _instruction_roots(scope, repo_root, client):
+        path = _instruction_path(root, client)
         original = path.read_bytes() if path.exists() else None
-        proposed, action = _updated_bytes(original, kind, selected)
+        proposed, action = _updated_bytes(original, kind, selected, client)
         plans.append(InstructionUpdate(path, original, proposed, action))
     return plans
 
 
-def _removed_bytes(original: bytes, kind: str) -> bytes:
+def _removed_bytes(original: bytes, kind: str, client: str = "codex") -> bytes:
     bom = b"\xef\xbb\xbf" if original.startswith(b"\xef\xbb\xbf") else b""
     try:
         text = original[len(bom):].decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise ValueError("Codex instruction file must be valid UTF-8 to preserve it safely.") from exc
+        raise ValueError("Instruction file must be valid UTF-8 to preserve it safely.") from exc
     newline = "\r\n" if "\r\n" in text else "\n"
-    if _parse_block(text, kind, newline) is None:
+    if _parse_block(text, kind, newline, client) is None:
         return original
     start = text.index(BEGIN)
     finish = text.index(END) + len(END)
@@ -163,13 +172,14 @@ def _removed_bytes(original: bytes, kind: str) -> bytes:
     return bom + (text[:start] + text[finish:]).encode("utf-8")
 
 
-def plan_instruction_removals(scope: str, repo_root: Path | None) -> list[InstructionUpdate]:
+def plan_instruction_removals(scope: str, repo_root: Path | None, client: str = "codex") -> list[InstructionUpdate]:
     """Plan removal of managed blocks from every recognized instruction file."""
     plans: list[InstructionUpdate] = []
-    for kind, root in _instruction_roots(scope, repo_root):
+    for kind, root in _instruction_roots(scope, repo_root, client):
         # This validates the managed root and both instruction paths for links.
-        _instruction_path(root)
-        for path in (root / "AGENTS.override.md", root / "AGENTS.md"):
+        _instruction_path(root, client)
+        filenames = ("CLAUDE.md",) if client == "claude" else ("AGENTS.override.md", "AGENTS.md")
+        for path in (root / name for name in filenames):
             if common.is_link_or_reparse(path):
                 raise ValueError(f"Refusing linked or reparse-point instruction file: {path}")
             if not path.exists():
@@ -177,22 +187,23 @@ def plan_instruction_removals(scope: str, repo_root: Path | None) -> list[Instru
             if not path.is_file():
                 raise ValueError(f"Instruction path is not a regular file: {path}")
             original = path.read_bytes()
-            proposed = _removed_bytes(original, kind)
+            proposed = _removed_bytes(original, kind, client)
             if proposed != original:
                 plans.append(InstructionUpdate(path, original, proposed, "Remove"))
     return plans
 
 
-def _write_instruction_plans(plans: list[InstructionUpdate], *, allow_hidden: bool) -> list[Path]:
+def _write_instruction_plans(plans: list[InstructionUpdate], *, allow_hidden: bool, client: str = "codex") -> list[Path]:
     written: list[Path] = []
     for plan in plans:
         try:
             if allow_hidden:
-                _instruction_path(plan.path.parent)
-                if plan.path.name not in ("AGENTS.md", "AGENTS.override.md"):
-                    raise OSError(f"Not a recognized Codex instruction file: {plan.path}")
-            elif _instruction_path(plan.path.parent) != plan.path:
-                raise OSError(f"The selected Codex instruction file changed since preview: {plan.path}")
+                _instruction_path(plan.path.parent, client)
+                allowed = ("CLAUDE.md",) if client == "claude" else ("AGENTS.md", "AGENTS.override.md")
+                if plan.path.name not in allowed:
+                    raise OSError(f"Not a recognized instruction file: {plan.path}")
+            elif _instruction_path(plan.path.parent, client) != plan.path:
+                raise OSError(f"The selected instruction file changed since preview: {plan.path}")
             current = plan.path.read_bytes() if plan.path.exists() else None
             if current != plan.original:
                 raise OSError(f"Instruction file changed since preview: {plan.path}")
@@ -210,11 +221,12 @@ def _write_instruction_plans(plans: list[InstructionUpdate], *, allow_hidden: bo
                 if mode is not None:
                     os.chmod(temp_path, mode)
                 if allow_hidden:
-                    _instruction_path(plan.path.parent)
-                    if plan.path.name not in ("AGENTS.md", "AGENTS.override.md"):
-                        raise OSError(f"Not a recognized Codex instruction file: {plan.path}")
-                elif _instruction_path(plan.path.parent) != plan.path:
-                    raise OSError(f"The selected Codex instruction file changed since preview: {plan.path}")
+                    _instruction_path(plan.path.parent, client)
+                    allowed = ("CLAUDE.md",) if client == "claude" else ("AGENTS.md", "AGENTS.override.md")
+                    if plan.path.name not in allowed:
+                        raise OSError(f"Not a recognized instruction file: {plan.path}")
+                elif _instruction_path(plan.path.parent, client) != plan.path:
+                    raise OSError(f"The selected instruction file changed since preview: {plan.path}")
                 if common.is_link_or_reparse(plan.path):
                     raise ValueError(f"Refusing linked or reparse-point instruction file: {plan.path}")
                 if plan.path.exists() and not plan.path.is_file():
@@ -234,9 +246,9 @@ def _write_instruction_plans(plans: list[InstructionUpdate], *, allow_hidden: bo
     return written
 
 
-def write_instruction_updates(plans: list[InstructionUpdate]) -> list[Path]:
-    return _write_instruction_plans(plans, allow_hidden=False)
+def write_instruction_updates(plans: list[InstructionUpdate], client: str = "codex") -> list[Path]:
+    return _write_instruction_plans(plans, allow_hidden=False, client=client)
 
 
-def write_instruction_removals(plans: list[InstructionUpdate]) -> list[Path]:
-    return _write_instruction_plans(plans, allow_hidden=True)
+def write_instruction_removals(plans: list[InstructionUpdate], client: str = "codex") -> list[Path]:
+    return _write_instruction_plans(plans, allow_hidden=True, client=client)

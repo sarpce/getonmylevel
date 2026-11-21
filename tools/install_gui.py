@@ -27,7 +27,7 @@ class Installer:
 
         outer = ttk.Frame(root, padding=14)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Install getonmylevel skills", font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
+        ttk.Label(outer, text="Install or update getonmylevel skills", font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
         ttk.Label(outer, text="Choose skills and where to install them. Nothing is written until you select Install and confirm.").pack(anchor="w", pady=(4, 12))
 
         skills_box = ttk.LabelFrame(outer, text="Skills", padding=10)
@@ -55,7 +55,7 @@ class Installer:
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Install selected skills", command=self.install).pack(side="right")
+        ttk.Button(buttons, text="Install or update selected skills", command=self.install).pack(side="right")
         ttk.Button(buttons, text="Close", command=root.destroy).pack(side="right", padx=(0, 8))
         self.scope_changed()
 
@@ -102,9 +102,12 @@ class Installer:
                 raise ValueError("Choose an existing target repository for repository scope.")
             repo_root = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
             roots = common.skill_roots(self.scope.get(), repo_root)
-            lines = [f"Skills: {', '.join(names) if names else '(none selected)'}", "Destinations:"]
-            lines.extend(f"  {root / name}" for root in roots for name in names)
-            lines.append("\nPreflight will refuse any occupied file, directory, or symlink destination.")
+            plan = common.preflight_skill_copy(SOURCE_ROOT, names, roots) if names else []
+            lines = [f"Skills: {', '.join(names) if names else '(none selected)'}", "Actions:"]
+            lines.extend(f"  {'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in plan)
+            if any(operation.is_update for operation in plan):
+                lines.append("\nUpdates replace the selected skill directory. Its previous contents are preserved in a backup.")
+            lines.append("\nThe checked-out skill files are the versions this installer installs.")
             if not names:
                 lines.append("Select at least one skill before installing.")
         except (OSError, ValueError) as exc:
@@ -117,12 +120,23 @@ class Installer:
     def install(self) -> None:
         try:
             names, roots, copies = self.selections()
-            if not messagebox.askyesno("Confirm installation", "Install these skills?\n\n" + "\n".join(str(dest) for _, dest in copies)):
+            actions = [f"{'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in copies]
+            confirmation = "Use the skill versions in this checkout?\n\n" + "\n".join(actions)
+            if any(operation.is_update for operation in copies):
+                confirmation += "\n\nUpdates replace selected directories and preserve their previous contents in backups."
+            if not messagebox.askyesno("Confirm installation or update", confirmation):
                 return
-            created = common.copy_skills(copies)
-            messagebox.showinfo("Installation complete", "Installed:\n" + "\n".join(created) + "\n\nNo Codex settings or global instructions were changed.")
+            result = common.copy_skills(copies)
+            sections = []
+            if result.installed:
+                sections.append("Installed:\n" + "\n".join(result.installed))
+            if result.updated:
+                sections.append("Updated:\n" + "\n".join(result.updated))
+            if result.backups:
+                sections.append("Backups:\n" + "\n".join(result.backups))
+            messagebox.showinfo("Installation complete", "\n\n".join(sections) + "\n\nNo Codex settings or global instructions were changed.")
         except (OSError, ValueError) as exc:
-            messagebox.showerror("Installation stopped", f"{exc}\n\nNo overwrite was attempted. A filesystem error during copying may leave earlier completed copies in place.")
+            messagebox.showerror("Installation stopped", str(exc))
 
 
 def main() -> None:

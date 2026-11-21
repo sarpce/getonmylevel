@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import tempfile
+from dataclasses import dataclass
 from typing import Iterable
 
 
@@ -15,6 +17,41 @@ SKILL_NAMES = (
     "getonmylevel-engineering",
 )
 AGENT_NAMES = ("designer", "implementer", "reviewer", "tester")
+
+
+@dataclass(frozen=True)
+class SkillCopy:
+    source: Path
+    destination: Path
+    expected_identity: tuple[int, int] | None
+
+    @property
+    def is_update(self) -> bool:
+        return self.expected_identity is not None
+
+
+@dataclass(frozen=True)
+class SkillCopyResult:
+    installed: tuple[str, ...]
+    updated: tuple[str, ...]
+    backups: tuple[str, ...]
+
+
+class SkillCopyError(OSError):
+    """A failed install with details about changes already made."""
+
+    def __init__(self, message: str, installed: list[str], updated: list[str], backups: list[str]):
+        self.installed = tuple(installed)
+        self.updated = tuple(updated)
+        self.backups = tuple(backups)
+        details = []
+        if installed:
+            details.append("installed: " + ", ".join(installed))
+        if updated:
+            details.append("updated: " + ", ".join(updated))
+        if backups:
+            details.append("backups: " + ", ".join(backups))
+        super().__init__(message + ("\nCompleted changes — " + "; ".join(details) if details else ""))
 
 
 def canonical(path: Path) -> Path:
@@ -86,7 +123,19 @@ def validate_roots(roots: Iterable[Path]) -> list[Path]:
     return result
 
 
-def preflight_skill_copy(source_root: Path, names: Iterable[str], roots: Iterable[Path]) -> list[tuple[Path, Path]]:
+def _identity(path: Path) -> tuple[int, int]:
+    info = path.lstat()
+    return info.st_dev, info.st_ino
+
+
+def _validate_backup_root(path: Path) -> None:
+    if is_link_or_reparse(path):
+        raise ValueError(f"Refusing linked or reparse-point backup directory: {path}")
+    if path.exists() and not path.is_dir():
+        raise ValueError(f"Backup path exists but is not a directory: {path}")
+
+
+def preflight_skill_copy(source_root: Path, names: Iterable[str], roots: Iterable[Path]) -> list[SkillCopy]:
     """Validate all selected sources and destinations before creating anything."""
     selected = validate_selection(names, SKILL_NAMES, "skill")
     resolved_roots = validate_roots(roots)
@@ -97,32 +146,112 @@ def preflight_skill_copy(source_root: Path, names: Iterable[str], roots: Iterabl
             raise FileNotFoundError(f"Skill source is missing SKILL.md: {source}")
         sources[name] = source
 
-    copies: list[tuple[Path, Path]] = []
+    copies: list[SkillCopy] = []
+    backup_roots: set[Path] = set()
     for root in resolved_roots:
         check_managed_root(root)
         for name in selected:
             destination = root / name
-            if is_link_or_reparse(destination) or destination.exists():
-                raise FileExistsError(f"Refusing to overwrite existing destination: {destination}")
-            copies.append((sources[name], destination))
+            source = canonical(sources[name])
+            target = canonical(destination)
+            if source == target or source in target.parents or target in source.parents:
+                raise ValueError(f"Source and destination overlap: {source} and {target}")
+            if is_link_or_reparse(destination):
+                raise FileExistsError(f"Refusing linked or reparse-point destination: {destination}")
+            if destination.exists():
+                if not destination.is_dir():
+                    raise FileExistsError(f"Refusing non-directory destination: {destination}")
+                expected = _identity(destination)
+                backup_root = root.parent / "getonmylevel-backups"
+                _validate_backup_root(backup_root)
+                backup_roots.add(backup_root)
+            else:
+                expected = None
+            copies.append(SkillCopy(source, destination, expected))
+    for backup_root in backup_roots:
+        _validate_backup_root(backup_root)
     return copies
 
 
-def copy_skills(copies: Iterable[tuple[Path, Path]]) -> list[str]:
-    """Perform a preflighted copy and return successfully created paths.
+def copy_skills(copies: Iterable[SkillCopy]) -> SkillCopyResult:
+    """Install preflighted skills, backing up each replaced directory first."""
+    installed: list[str] = []
+    updated: list[str] = []
+    backups: list[str] = []
+    for operation in copies:
+        source, destination = operation.source, operation.destination
+        staging: Path | None = None
+        backup: Path | None = None
+        try:
+            check_managed_root(destination.parent)
+            if is_link_or_reparse(destination):
+                raise FileExistsError(f"Refusing linked or reparse-point destination: {destination}")
+            exists = destination.exists()
+            if operation.expected_identity is None:
+                if exists:
+                    raise FileExistsError(f"Destination appeared after preflight: {destination}")
+            else:
+                if not exists or not destination.is_dir() or _identity(destination) != operation.expected_identity:
+                    raise FileExistsError(f"Destination changed after preflight: {destination}")
 
-    Filesystem operations are not transactional; an I/O error can leave earlier
-    copies in place, which is reported to the caller.
-    """
-    created: list[str] = []
-    for source, destination in copies:
-        check_managed_root(destination.parent)
-        if is_link_or_reparse(destination) or destination.exists():
-            raise FileExistsError(f"Refusing to overwrite newly occupied destination: {destination}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, destination, symlinks=True)
-        created.append(str(destination))
-    return created
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            staging_parent = Path(tempfile.mkdtemp(prefix=".getonmylevel-stage-", dir=destination.parent))
+            staging = staging_parent / "skill"
+            shutil.copytree(source, staging, symlinks=True)
+
+            # Recheck immediately before moving anything to catch changes during staging.
+            check_managed_root(destination.parent)
+            if is_link_or_reparse(destination):
+                raise FileExistsError(f"Refusing linked or reparse-point destination: {destination}")
+            exists = destination.exists()
+            if operation.expected_identity is None:
+                if exists:
+                    raise FileExistsError(f"Destination appeared after preflight: {destination}")
+            elif not exists or not destination.is_dir() or _identity(destination) != operation.expected_identity:
+                raise FileExistsError(f"Destination changed after preflight: {destination}")
+
+            if operation.is_update:
+                backup_root = destination.parent.parent / "getonmylevel-backups"
+                _validate_backup_root(backup_root)
+                backup_root.mkdir(parents=True, exist_ok=True)
+                backup = Path(tempfile.mkdtemp(prefix=f"{destination.name}-", dir=backup_root))
+                saved_skill = backup / destination.name
+                try:
+                    destination.rename(saved_skill)
+                except OSError as move_error:
+                    try:
+                        backup.rmdir()
+                    except OSError as cleanup_error:
+                        raise OSError(
+                            f"Could not move destination into backup ({move_error}); unused backup directory remains at {backup} and could not be removed ({cleanup_error})"
+                        ) from move_error
+                    raise
+                backups.append(str(backup))
+                try:
+                    staging.rename(destination)
+                except OSError:
+                    try:
+                        saved_skill.rename(destination)
+                        backups.remove(str(backup))
+                        try:
+                            backup.rmdir()
+                        except OSError:
+                            backups.append(str(backup))
+                    except OSError as restore_error:
+                        raise OSError(f"Could not install update or restore original. Original remains at backup: {backup}. Restoration error: {restore_error}")
+                    raise
+                updated.append(str(destination))
+            else:
+                staging.rename(destination)
+                installed.append(str(destination))
+        except (OSError, ValueError) as exc:
+            raise SkillCopyError(str(exc), installed, updated, backups) from exc
+        finally:
+            if staging is not None:
+                staging_parent = staging.parent
+                if staging_parent.exists():
+                    shutil.rmtree(staging_parent, ignore_errors=True)
+    return SkillCopyResult(tuple(installed), tuple(updated), tuple(backups))
 
 
 def skill_roots(scope: str, repo_root: Path | None) -> list[Path]:

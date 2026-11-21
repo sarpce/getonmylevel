@@ -23,13 +23,13 @@ Run the graphical installer from any working directory:
 python tools/install_gui.py
 ```
 
-Select one or more skills and a scope: **User-wide**, **Target repository**, or **Both**. For repository scope, choose an existing target repository. The preview shows all destinations. The tool validates every source and destination before writing and asks for confirmation. Existing files, directories, symlinks, junctions, and other detected reparse points are refused in the selected base and managed path. An I/O error during a multi-skill copy can leave earlier completed copies in place; the tool reports them.
+Select one or more skills and a scope: **User-wide**, **Target repository**, or **Both**. For repository scope, choose an existing target repository. The preview shows whether each skill will be installed or updated. The installer uses the skill files in this checkout; it does not download a release. After confirmation, an existing skill directory is replaced with the checked-out version, and its previous contents (including local edits) are kept under `getonmylevel-backups` beside the skills directory. Existing files, symlinks, junctions, and other detected reparse points are refused as skill destinations, as are linked or invalid managed paths. An I/O error during a multi-skill operation can leave earlier completed copies in place; the tool reports completed changes and backup paths.
 
 User-wide skills go to `$HOME/.agents/skills`. Repository skills go to `<target-repository>/.agents/skills` and may be tracked by that repository. Installing in both places may cause duplicate discovery; usually choose one. The built-in `$skill-installer` uses `$CODEX_HOME/skills`; locations may differ by client. Follow current [Codex skills documentation](https://developers.openai.com/codex/skills). Restart Codex if a new skill is not discovered.
 
 ### Terminal fallback
 
-The same selection is available without Tkinter. Run from this repository root and edit the exact allowlisted names, scopes, and repository root. The script preflights selected source files and every destination, including symlinks, before it creates directories or copies files.
+The same selection is available without Tkinter for **new installations only**. Existing skill destinations are refused to prevent overwriting them. To update an existing installation with a backup of its current contents, use the graphical installer above. Run the terminal commands from this repository root and edit the exact allowlisted names, scopes, and repository root. The script preflights selected source files and every destination, including symlinks, before it creates directories or copies files.
 
 PowerShell:
 

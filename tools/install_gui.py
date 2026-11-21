@@ -100,7 +100,7 @@ class Installer:
             self.selected[name].trace_add("write", lambda *_args, key=name: self.update_skill_card(key))
         self.skills_grid.bind("<Configure>", self.reflow_skill_cards)
 
-        codegraph_card = ttk.LabelFrame(outer, text="Optional project context dependency", style="Card.TLabelframe")
+        codegraph_card = ttk.LabelFrame(outer, text="Recommended tool", style="Card.TLabelframe")
         codegraph_card.pack(fill="x", pady=(12, 0))
         self.codegraph_selected = tk.BooleanVar(value=False)
         self.codegraph_by_client = {"codex": False, "claude": False}
@@ -114,10 +114,9 @@ class Installer:
         self.codegraph_check.pack(side="left", anchor="w")
         self.codegraph_selected.trace_add("write", self.update_codegraph_marker)
         self.codegraph_selected.trace_add("write", self.remember_codegraph_selection)
-        self.codegraph_description = ttk.Label(codegraph_card, text="Selected automatically with the project context skill. Installs and configures the global dependency after confirmation.",
+        self.codegraph_description = ttk.Label(codegraph_card, text="Optional: install CodeGraph if needed and configure the selected client globally after confirmation.",
                                                style="CardMuted.TLabel", wraplength=600)
         self.codegraph_description.pack(anchor="w", padx=(26, 0), pady=(2, 0))
-        self.selected["getonmylevel-context"].trace_add("write", self.context_selection_changed)
 
         scope_box = ttk.LabelFrame(outer, text="Install location", padding=10)
         scope_box.pack(fill="x", pady=(10, 0))
@@ -178,7 +177,7 @@ class Installer:
         outer.bind("<Configure>", self.fit_page_copy)
         if configure_window:
             root.protocol("WM_DELETE_WINDOW", self.close)
-        self.context_selection_changed()
+        self.refresh_preview()
 
     def selected_client(self) -> str:
         client = getattr(self, "client", None)
@@ -227,25 +226,14 @@ class Installer:
                       pady=(0, 12))
             self.skill_card_descriptions[name].configure(wraplength=max(180, card_width - 36))
 
-    def context_selection_changed(self, *_args) -> None:
-        if self.selected["getonmylevel-context"].get() and self.client.get() == "codex":
-            self.codegraph_selected.set(True)
-            self.codegraph_check.configure(state="disabled")
-        else:
-            self.codegraph_check.configure(state="normal")
-        self.refresh_preview()
-
     def client_changed(self) -> None:
         claude = self.client.get() == "claude"
         self.codegraph_selected.set(self.codegraph_by_client[self.client.get()])
-        self.codegraph_description.configure(text=("Optional user-wide dependency for Claude Code. Install and configure only after reviewing the preview." if claude else "Selected automatically with the project context skill. Installs and configures the global Codex dependency after confirmation."))
         self.codegraph_check.configure(state="normal")
         for check in self.suggested_checks:
             check.configure(state="disabled" if claude else "normal")
         self.suggested_button.configure(state="disabled" if claude else "normal")
         self.suggested_refresh_button.configure(state="disabled" if claude else "normal")
-        self.context_selection_changed()
-        self.codegraph_check.configure(state=("disabled" if self.client.get() == "codex" and self.selected["getonmylevel-context"].get() else "normal"))
         self.refresh_preview()
 
     def close(self) -> None:
@@ -468,7 +456,8 @@ class Installer:
             lines.extend(f"  {'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in plan)
             if any(operation.is_update for operation in plan):
                 lines.append("\nUpdates replace the selected skill directory. Its previous contents are preserved in a backup.")
-            lines.append("\nThe checked-out skill files are the versions this installer installs.")
+            if names:
+                lines.append("\nThe checked-out skill files are the versions this installer installs.")
             if instruction_plans:
                 client_name = "Claude Code" if self.selected_client() == "claude" else "Codex"
                 lines.append(f"\n{client_name} default-use instructions (existing text is preserved):")
@@ -477,11 +466,11 @@ class Installer:
             if wants_codegraph:
                 codegraph_plan = codegraph_installer.plan_install(self.selected_client())
                 client_name = "Claude Code" if self.selected_client() == "claude" else "Codex"
-                lines.extend(["", "CodeGraph: optional user-wide external dependency", codegraph_plan.details,
-                              f"  Configure {client_name} globally: codegraph install --target={self.selected_client()} --location=global --yes",
+                lines.extend(["", "CodeGraph: optional user-wide tool", codegraph_plan.details,
+                              f"  Configures {client_name} globally, including MCP configuration and managed instructions.",
                               f"  No project indexing or initialization will run. Restart {client_name} if needed."])
-                if codegraph_plan.npm_install:
-                    lines.append("  Planned package install: npm install -g @colbymchenry/codegraph")
+                lines.append("  Commands/actions:")
+                lines.extend("    " + " ".join(command) for command in codegraph_plan.commands)
             if not names and not wants_codegraph:
                 lines.append("Select at least one core skill or CodeGraph before installing.")
         except (OSError, ValueError, RuntimeError) as exc:
@@ -502,14 +491,17 @@ class Installer:
             names, roots, copies, instruction_plans, codegraph_plan = self.selections()
             actions = [f"{'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in copies]
             actions.extend(f"Instructions ({item.action.lower()}): {item.path}" for item in instruction_plans)
-            confirmation = "Use the skill versions in this checkout?\n\n" + "\n".join(actions)
+            confirmation = "Review the selected installation or update."
+            if actions:
+                confirmation += "\n\n" + "\n".join(actions)
             if any(operation.is_update for operation in copies):
                 confirmation += "\n\nUpdates replace selected directories and preserve their previous contents in backups."
             client = self.selected_client()
             client_name = "Claude Code" if client == "claude" else "Codex"
-            confirmation += f"\n\n{client_name} will be instructed to read these skills by default when relevant. Existing instruction text is preserved. A new conversation may be needed; higher-priority instructions still apply."
+            if names:
+                confirmation += f"\n\n{client_name} will be instructed to read these skills by default when relevant. Existing instruction text is preserved. A new conversation may be needed; higher-priority instructions still apply."
             if codegraph_plan:
-                confirmation += (f"\n\nCodeGraph is an optional user-wide external dependency. It may download packages and will configure {client_name} globally, including its MCP configuration and managed instructions. "
+                confirmation += (f"\n\nCodeGraph is an optional user-wide tool. It may download packages and will configure {client_name} globally, including its MCP configuration and managed instructions. "
                                  f"No project will be initialized or indexed. Restart {client_name} if needed.\n\n" + codegraph_plan.details +
                                  "\nCommands/actions:\n" + "\n".join("  " + " ".join(command) for command in codegraph_plan.commands))
             if not messagebox.askyesno("Confirm installation or update", confirmation):
@@ -574,9 +566,8 @@ class Installer:
 
     def finish_install_worker(self) -> None:
         self.install_busy = False
-        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, *self.client_buttons, *self.skill_checks):
+        for widget in (self.skill_button, self.remove_button, self.close_button, self.suggested_button, self.codegraph_check, *self.client_buttons, *self.skill_checks):
             widget.configure(state="normal")
-        self.context_selection_changed()
         claude = self.client.get() == "claude"
         self.suggested_button.configure(state="disabled" if claude else "normal")
         self.suggested_refresh_button.configure(state="disabled" if claude else "normal")

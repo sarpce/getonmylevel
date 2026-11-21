@@ -56,7 +56,7 @@ To remove the managed default-use instructions, choose the scope and use **Remov
 
 ## Extra tools
 
-Selecting the context skill also selects **CodeGraph** for user-wide installation and global Codex setup. If missing, it needs Node.js and npm. Setup may download packages and change Codex MCP configuration and managed instructions. It does not initialize or index any project; that is a separate choice. CodeGraph can also be selected on its own.
+**CodeGraph** is an independently selectable recommendation for Codex and Claude Code. Selecting the context skill does not install it or require Node.js or npm. When explicitly selected, CodeGraph is installed if missing (requiring Node.js and npm) and configured globally for the chosen client. Setup may download packages and change that client's MCP configuration and managed instructions. It does not initialize or index any project; that is a separate choice.
 
 The GUI offers optional [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), and [CLI-Anything](https://github.com/HKUDS/CLI-Anything). They are unchecked by default. Review each confirmation: external installs may download files or run upstream code, and upstream branches are not pinned. RTK is installed separately from its Codex activation. The GUI can remove detected Last 30 Days and CLI-Anything skill directories; remove RTK with its package manager.
 

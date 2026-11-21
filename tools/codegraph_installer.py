@@ -1,4 +1,4 @@
-"""Plan and configure the optional user-wide CodeGraph dependency."""
+"""Plan and configure the optional user-wide CodeGraph tool."""
 
 from __future__ import annotations
 
@@ -125,14 +125,14 @@ def _checked(command: tuple[str, ...]) -> str:
 
 
 def install(plan: CodeGraphPlan) -> str:
-    """Run the confirmed package install and Codex configuration steps."""
+    """Run the confirmed package install and selected client configuration steps."""
     if plan.npm_install:
         _checked(plan.npm_install)
     if not plan.executable:
         raise RuntimeError("No CodeGraph executable was planned.")
     executable_path = Path(plan.executable[-1])
     if not executable_path.is_file():
-        raise RuntimeError(f"CodeGraph CLI was not found after installation at {executable_path}. Package installation may have completed; Codex was not configured.")
+        raise RuntimeError(f"CodeGraph CLI was not found after installation at {executable_path}. Package installation may have completed; {_client_label(plan.client)} was not configured.")
     _checked((*plan.executable, *install_args(plan.client)))
     label = _client_label(plan.client)
     return f"CodeGraph is configured for {label} globally. No project was initialized. Restart {label} if the MCP server is not available."

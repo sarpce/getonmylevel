@@ -13,7 +13,7 @@ git clone https://github.com/sarpce/getonmylevel.git
 cd getonmylevel
 ```
 
-Choose Codex or Claude Code in the installer. It integrates selected skills into the selected client's instruction file with a managed block that asks the client to read them by default when relevant. This natural-language preference remains subject to instruction precedence, client behavior, file-size limits, and skill availability. Skill installation itself does not change client settings. Selecting the context skill automatically selects CodeGraph for Codex; for Claude Code, CodeGraph remains an optional user-wide dependency.
+Choose Codex or Claude Code in the installer. It integrates selected skills into the selected client's instruction file with a managed block that asks the client to read them by default when relevant. This natural-language preference remains subject to instruction precedence, client behavior, file-size limits, and skill availability. Skill installation itself does not change client settings. CodeGraph is independently selectable for either client; the context skill does not require it or Node.js and npm.
 
 ## Install skills
 
@@ -31,7 +31,7 @@ In **Agents**, Codex roles use the existing TOML format and local Codex model di
 
 The managed block preserves surrounding instruction text. Later installs add newly selected skill names to the existing block; deselecting a skill does not remove it. Malformed or manually edited managed blocks are refused for manual repair. To turn off the default preference, remove the exact region beginning `<!-- getonmylevel-skills:begin -->` and ending `<!-- getonmylevel-skills:end -->`; this leaves installed skill directories in place. Instructions are subject to higher-priority guidance and Codex's `project_doc_max_bytes` limit, so a large instruction file may prevent the block from being read.
 
-Selecting **getonmylevel-skill-discovery** also adds an instruction to review available skills and relevant skill locations for each task, and use skills when they can materially help. The GUI labels the bundled choices **Core skills**. Selecting the context skill checks and locks CodeGraph as its dependency. CodeGraph can be selected independently when context is unchecked. If CodeGraph is missing, Node.js and npm are required to install it. Its global Codex setup may download packages and changes Codex MCP configuration and managed instructions. The GUI does not initialize or index a project; indexing is a separate choice. Restart Codex if its MCP server is not available.
+Selecting **getonmylevel-skill-discovery** also adds an instruction to review available skills and relevant skill locations for each task, and use skills when they can materially help. The GUI labels the bundled choices **Core skills**. CodeGraph is an independent recommendation for Codex and Claude Code, whether or not the context skill is selected. If explicitly selected and missing, Node.js and npm are required to install it. Global setup may download packages and changes the selected client's MCP configuration and managed instructions. The GUI does not initialize or index a project; indexing is a separate choice. Restart the selected client if its MCP server is not available.
 
 ### Suggested skillsets and tools
 
@@ -193,9 +193,9 @@ Agent-based development automatically spawns the configured designer then implem
 
 ## Context tools
 
-CodeGraph is an optional user-wide dependency of the context skill. The GUI selects it automatically when that skill is selected and configures Codex globally after confirmation; it may download packages and edit Codex MCP configuration and managed instructions. It does not initialize or index a project. The terminal fallback copies skill files only and does not install CodeGraph.
+CodeGraph is an independently selectable user-wide recommendation. After confirmation, the GUI installs it if needed and configures the selected client globally; it may download packages and edit that client's MCP configuration and managed instructions. It does not initialize or index a project. The terminal fallback copies skill files only and does not install CodeGraph.
 
-The GUI shows the planned global setup command and distinguishes an existing CodeGraph command from a planned package installation. If using CodeGraph manually, review its [repository and setup instructions](https://github.com/colbymchenry/codegraph); project indexing is separate from global Codex configuration.
+The GUI shows the planned global setup command and distinguishes an existing CodeGraph command from a planned package installation. If using CodeGraph manually, review its [repository and setup instructions](https://github.com/colbymchenry/codegraph); project indexing is separate from global client configuration.
 
 ## Platform notes
 

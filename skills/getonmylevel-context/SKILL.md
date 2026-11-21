@@ -5,7 +5,7 @@ description: Find relevant project context efficiently and maintain a small, loc
 
 # Context and navigation
 
-Start with a focused query using available project indexes and ignore-aware search. For small or one-off tasks, targeted file reads and `rg` are often enough. Reuse an existing index when useful; do not create a duplicate graph without a demonstrated benefit. CodeGraph is an optional dependency selected by the GUI installer alongside this skill for supported Codex and Claude Code integrations; if it is absent or the project is not indexed, use the available search and read tools.
+Start with a focused query using available project indexes and ignore-aware search. For small or one-off tasks, targeted file reads and `rg` are often enough. Reuse an existing index when useful; do not create a duplicate graph without a demonstrated benefit. CodeGraph is an independently selectable recommendation in the GUI installer for Codex and Claude Code; if it is absent or the project is not indexed, use the available search and read tools.
 
 Indexes and summaries are navigation aids. They can be stale, incomplete, or wrong. Inspect authoritative source for implementation, correctness, and consequential decisions. Do not invent undocumented behavior. Respect repository instructions, permissions, and ignore rules. Exclude secrets, generated files, and irrelevant content.
 

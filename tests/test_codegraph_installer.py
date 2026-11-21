@@ -5,7 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import codegraph_installer
@@ -20,6 +20,9 @@ class CodeGraphInstallTests(unittest.TestCase):
         def get(self):
             return self.value
 
+        def set(self, value):
+            self.value = value
+
     def test_codegraph_only_selection_skips_repository_scope_validation(self):
         installer = install_gui.Installer.__new__(install_gui.Installer)
         installer.selected = {"getonmylevel-context": self.Variable(False)}
@@ -33,6 +36,75 @@ class CodeGraphInstallTests(unittest.TestCase):
         self.assertEqual(names, [])
         self.assertEqual((roots, copies, instructions), ([], [], []))
         self.assertIs(selected_plan, plan)
+
+    def test_context_selection_does_not_plan_codegraph_for_either_client(self):
+        for client in ("codex", "claude"):
+            with self.subTest(client=client):
+                installer = install_gui.Installer.__new__(install_gui.Installer)
+                installer.client = self.Variable(client)
+                installer.selected = {"getonmylevel-context": self.Variable(True)}
+                installer.codegraph_selected = self.Variable(False)
+                installer.scope = self.Variable("user")
+                with patch.object(codegraph_installer, "plan_install", side_effect=AssertionError("unexpected CodeGraph prerequisite check")), \
+                     patch.object(install_gui.common, "skill_roots", return_value=[]), \
+                     patch.object(install_gui.common, "preflight_skill_copy", return_value=[]), \
+                     patch.object(install_gui.instruction_integration, "plan_instruction_updates", return_value=[]):
+                    names, _, _, _, plan = installer.selections()
+                self.assertEqual(names, ["getonmylevel-context"])
+                self.assertIsNone(plan)
+
+    def test_client_switch_keeps_independent_codegraph_choices_enabled(self):
+        installer = install_gui.Installer.__new__(install_gui.Installer)
+        installer.client = self.Variable("claude")
+        installer.codegraph_selected = self.Variable(True)
+        installer.codegraph_by_client = {"codex": True, "claude": False}
+        installer.codegraph_check = Mock()
+        installer.suggested_checks = []
+        installer.suggested_button = Mock()
+        installer.suggested_refresh_button = Mock()
+        installer.refresh_preview = Mock()
+        installer.client_changed()
+        self.assertFalse(installer.codegraph_selected.get())
+        installer.client.set("codex")
+        installer.client_changed()
+        self.assertTrue(installer.codegraph_selected.get())
+        installer.codegraph_check.configure.assert_called_with(state="normal")
+
+    def test_explicit_codegraph_plan_targets_each_client(self):
+        for client in ("codex", "claude"):
+            with self.subTest(client=client):
+                installer = install_gui.Installer.__new__(install_gui.Installer)
+                installer.client = self.Variable(client)
+                installer.selected = {"getonmylevel-context": self.Variable(False)}
+                installer.codegraph_selected = self.Variable(True)
+                plan = codegraph_installer.CodeGraphPlan(("codegraph",), None, "existing", client=client)
+                with patch.object(codegraph_installer, "plan_install", return_value=plan) as planner:
+                    self.assertIs(installer.selections()[-1], plan)
+                planner.assert_called_once_with(client)
+                self.assertIn(f"--target={client}", plan.commands[-1])
+
+    def test_codegraph_only_preview_and_confirmation_describe_actual_actions(self):
+        for client in ("codex", "claude"):
+            with self.subTest(client=client):
+                installer = install_gui.Installer.__new__(install_gui.Installer)
+                installer.client = self.Variable(client)
+                installer.selected = {"getonmylevel-context": self.Variable(False)}
+                installer.codegraph_selected = self.Variable(True)
+                installer.preview = Mock()
+                installer.install_busy = False
+                plan = codegraph_installer.CodeGraphPlan(("codegraph",), None, "existing", client=client)
+                with patch.object(codegraph_installer, "plan_install", return_value=plan), \
+                     patch.object(install_gui.messagebox, "askyesno", return_value=False) as confirm:
+                    installer.refresh_preview()
+                    installer.install()
+                preview = installer.preview.insert.call_args.args[1]
+                confirmation = confirm.call_args.args[1]
+                for text in (preview, confirmation):
+                    self.assertIn(f"--target={client}", text)
+                    self.assertIn("MCP configuration and managed instructions", text)
+                    self.assertIn("No project", text)
+                    self.assertNotIn("read these skills", text)
+                self.assertNotIn("npm install", preview)
 
     def test_configuration_uses_fixed_global_codex_arguments(self):
         with tempfile.TemporaryDirectory() as directory:

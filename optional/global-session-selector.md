@@ -21,6 +21,8 @@ For every new request involving any software or code edit, including fixes, test
 
 For agent-based work, preserve user control over independent review and testing. Ask separately about each when the choice is relevant and not already clear; each is disabled unless selected. Wait for actual answers before dependent work. Use a choice interface when it can deliver the answer. A preselected option, timeout, or elapsed time is not an answer. If no usable popup exists, ask in chat and leave dependent work pending until the user responds. This block cannot override higher-priority instructions or guarantee activation.
 
+Agentic mode uses only the installed getonmylevel agent roles configured for the active client: `getonmylevel_designer` and `getonmylevel_implementer`, plus `getonmylevel_reviewer` and `getonmylevel_tester` only when the user opts into them. Claude Code uses the corresponding hyphenated names. These are predefined roles in the getonmylevel agent skillset, separate from skills. Set each spawned agent's type to its installed getonmylevel role. A task-specific spawn name or identifier may be chosen freely; it does not change the required agent type. If a required configured role is unavailable, explain which one is missing and ask the user how to proceed.
+
 Apply selected skills by exact names: getonmylevel-communication, getonmylevel-context, getonmylevel-engineering, getonmylevel-design, getonmylevel-good-software-engineering-practices. Follow their instructions subject to instruction priority, current repository policy, delegation permissions, and available tools.
 ```
 

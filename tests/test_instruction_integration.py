@@ -82,6 +82,38 @@ class InstructionIntegrationTests(unittest.TestCase):
                     removed, action = integration._updated_bytes(updated, scope, [], client)
                     self.assertEqual((removed, action), (b"", "Remove"))
 
+    def test_mode_gate_is_added_only_for_relevant_active_skills(self):
+        gate_skills = ("getonmylevel-communication", "getonmylevel-engineering",
+                       "getonmylevel-good-software-engineering-practices")
+        for client in ("codex", "claude"):
+            for scope in ("user", "repo"):
+                with self.subTest(client=client, scope=scope):
+                    for skill in gate_skills:
+                        updated, action = integration._updated_bytes(None, scope, [skill], client)
+                        self.assertEqual(action, "Create")
+                        text = updated.decode()
+                        self.assertIn("choose Simple or Agentic mode before editing or delegating", text)
+                        self.assertIn("Read-only investigation may continue", text)
+                        self.assertIn("Record the actual answer for this request", text)
+                        self.assertIn("independent reviewer and an independent tester", text)
+                    design, = [name for name in SKILLS if name not in gate_skills][:1]
+                    updated, _ = integration._updated_bytes(None, scope, [design], client)
+                    self.assertNotIn(b"choose Simple or Agentic mode", updated)
+
+    def test_mode_gate_upgrade_preserves_old_managed_blocks_and_user_text(self):
+        for client in ("codex", "claude"):
+            with self.subTest(client=client):
+                old = integration._previous_block(["getonmylevel-engineering"], "user", "\n", client)
+                original = ("Before\n" + old + "\nAfter\n").encode()
+                updated, action = integration._updated_bytes(original, "user", ["getonmylevel-engineering"], client)
+                self.assertEqual(action, "Update")
+                self.assertIn(b"Record the actual answer for this request", updated)
+                self.assertTrue(updated.startswith(b"Before\n"))
+                self.assertTrue(updated.endswith(b"\nAfter\n"))
+                self.assertEqual(integration._updated_bytes(updated, "user", ["getonmylevel-engineering"], client)[1], "Already current")
+                removed, action = integration._updated_bytes(updated, "user", [], client)
+                self.assertEqual((removed, action), (b"Before\n\nAfter\n", "Remove"))
+
     def test_activation_scope_and_missing_files(self):
         import skill_operations
         design, engineering = "getonmylevel-design", "getonmylevel-engineering"
@@ -161,12 +193,17 @@ class InstructionIntegrationTests(unittest.TestCase):
         with mock.patch.object(agents_gui.messagebox, "showinfo"):
             gui.copy_selector()
         copied = gui.root.value.casefold()
-        for phrase in ("always prompt the user to choose Simple or Agentic mode", "before editing or delegating", "independent review and testing",
-                       "For the skill-selection choice, use a choice interface",
+        for phrase in ("always prompt the user to choose Simple or Agentic mode", "before editing or delegating", "independent reviewer and an independent tester",
+                       "Read-only investigation may continue", "Record the actual answer for this request",
                        "each is disabled unless selected",
-                       "wait for the selection before dependent work"):
+                       "wait for the actual answer to every choice"):
             self.assertIn(phrase.casefold(), copied)
         self.assertIn("do not silently switch modes", copied)
+
+    def test_readme_explains_instruction_level_limit(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8").casefold()
+        self.assertIn("cannot intercept client tool calls", readme)
+        self.assertIn("cannot guarantee that a choice was presented or recorded", readme)
 
     def test_discovery_policy_stays_in_skill(self):
         plan, = integration.plan_instruction_updates("user", None, ["getonmylevel-skill-discovery"])

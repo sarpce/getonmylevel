@@ -118,6 +118,22 @@ def _previous_agentic_block(names: list[str], kind: str, newline: str, client: s
 
 def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
     block = _previous_agentic_block(names, kind, newline, client)
+    if {"getonmylevel-communication", "getonmylevel-engineering", "getonmylevel-good-software-engineering-practices"}.intersection(names):
+        mode_gate = ("For every new request involving any software or code edit, including fixes, tests, configuration, documentation, and skill instructions, always prompt the user to choose Simple or Agentic mode before editing or delegating, regardless of size or any choice made for an earlier request. Read-only investigation may continue while the answer is pending. Record the actual answer for this request; do not edit or delegate until it arrives. Simple means working directly. Agentic mode uses only the installed getonmylevel agent roles configured for the active client: getonmylevel_designer and getonmylevel_implementer, plus getonmylevel_reviewer and getonmylevel_tester only when the user opts into those roles. Claude Code uses the corresponding hyphenated names. Set each spawned agent's type to its installed getonmylevel role. A task-specific spawn name or identifier may be chosen freely; it does not change the required agent type. If a required configured role is unavailable, explain which role is missing and ask the user how to proceed. Ask separately whether the user wants an independent reviewer and an independent tester; each is disabled unless selected. Wait for the actual answer to every choice before assigning roles or doing dependent work. A default, timeout, or elapsed time is not an answer. Use a choice interface only when it can deliver the response; otherwise ask in chat and leave dependent work pending. If Agentic mode is unavailable or disallowed, explain why and ask how to proceed instead of silently switching modes. Respect higher-priority instructions.")
+        block = block.replace(END, mode_gate + newline + END)
+    return _add_context_guidance(block, newline)
+
+
+def _previous_block_with_mode_gate(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+    """Render the immediately previous managed template for migration compatibility."""
+    block = _previous_agentic_block(names, kind, newline, client)
+    if {"getonmylevel-communication", "getonmylevel-engineering", "getonmylevel-good-software-engineering-practices"}.intersection(names):
+        mode_gate = ("For every new request involving any software or code edit, including fixes, tests, configuration, documentation, and skill instructions, always prompt the user to choose Simple or Agentic mode before editing or delegating, regardless of size or any choice made for an earlier request. Read-only investigation may continue while the answer is pending. Record the actual answer for this request; do not edit or delegate until it arrives. Simple means working directly; Agentic means using agents subject to the active session's delegation rules. In Agentic mode, ask separately whether the user wants an independent reviewer and an independent tester; each is disabled unless selected. Wait for the actual answer to every choice before assigning roles or doing dependent work. A default, timeout, or elapsed time is not an answer. Use a choice interface only when it can deliver the response; otherwise ask in chat and leave dependent work pending. If Agentic mode is unavailable or disallowed, explain why and ask how to proceed instead of silently switching modes. Respect higher-priority instructions.")
+        block = block.replace(END, mode_gate + newline + END)
+    return _add_context_guidance(block, newline)
+
+
+def _add_context_guidance(block: str, newline: str) -> str:
     guidance = ("## CodeGraph project context" + newline + newline +
                 "Whenever a task requires repository context, check whether the repository has a CodeGraph index. "
                 "If it does, use the index for relevant code exploration when available, and fall back to other tools if unavailable or insufficient. "
@@ -190,7 +206,7 @@ def _parse_block(text: str, kind: str, newline: str, client: str = "codex") -> l
             if name not in common.SKILL_NAMES or name in names:
                 raise ValueError(f"Managed skill instruction block has an unknown or duplicate skill: {name!r}.")
             names.append(name)
-    if not names or body not in (_block(names, kind, newline, client), _previous_agentic_block(names, kind, newline, client), _delegation_block(names, kind, newline, client), _prior_block(names, kind, newline, client), _current_block(names, kind, newline, client), _previous_block(names, kind, newline, client), _legacy_block(names, kind, newline, client)):
+    if not names or body not in (_block(names, kind, newline, client), _previous_block_with_mode_gate(names, kind, newline, client), _add_context_guidance(_previous_agentic_block(names, kind, newline, client), newline), _previous_agentic_block(names, kind, newline, client), _delegation_block(names, kind, newline, client), _prior_block(names, kind, newline, client), _current_block(names, kind, newline, client), _previous_block(names, kind, newline, client), _legacy_block(names, kind, newline, client)):
         raise ValueError("Managed skill instruction block was edited or is malformed; repair or remove it manually.")
     return names
 

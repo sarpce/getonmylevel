@@ -65,6 +65,23 @@ class InstructionIntegrationTests(unittest.TestCase):
         integration.write_instruction_updates([plan])
         self.assertEqual(path.read_bytes(), b"\xef\xbb\xbfBefore\r\n\r\nAfter\r\n")
 
+    def test_engineering_activation_requests_delegation_and_upgrades_old_block(self):
+        engineering = "getonmylevel-engineering"
+        for client in ("codex", "claude"):
+            for scope in ("user", "repo"):
+                with self.subTest(client=client, scope=scope):
+                    old = integration._prior_block([engineering], scope, "\n", client)
+                    updated, action = integration._updated_bytes(old.encode(), scope, [engineering], client)
+                    self.assertEqual(action, "Update")
+                    self.assertIn(b"## Agentic mode", updated)
+                    self.assertIn(b"request it directly", updated)
+                    self.assertIn(b"I request delegation to sub-agents", updated)
+                    previous = integration._delegation_block([engineering], scope, "\n", client).encode()
+                    self.assertEqual(integration._updated_bytes(previous, scope, [engineering], client), (updated, "Update"))
+                    self.assertEqual(integration._updated_bytes(updated, scope, [engineering], client)[1], "Already current")
+                    removed, action = integration._updated_bytes(updated, scope, [], client)
+                    self.assertEqual((removed, action), (b"", "Remove"))
+
     def test_activation_scope_and_missing_files(self):
         import skill_operations
         design, engineering = "getonmylevel-design", "getonmylevel-engineering"
@@ -126,7 +143,7 @@ class InstructionIntegrationTests(unittest.TestCase):
             integration.write_instruction_updates([plan], "claude")
             self.assertNotIn("straightforward software changes directly", path.read_text(encoding="utf-8"))
 
-    def test_clipboard_selector_uses_direct_default_and_keeps_review_choices(self):
+    def test_clipboard_selector_requires_mode_choice_and_keeps_review_choices(self):
         class Clipboard:
             def __init__(self):
                 self.value = ""
@@ -144,12 +161,12 @@ class InstructionIntegrationTests(unittest.TestCase):
         with mock.patch.object(agents_gui.messagebox, "showinfo"):
             gui.copy_selector()
         copied = gui.root.value.casefold()
-        for phrase in ("without an up-front workflow choice", "agent-based work", "independent review and testing",
+        for phrase in ("always prompt the user to choose Simple or Agentic mode", "before editing or delegating", "independent review and testing",
                        "For the skill-selection choice, use a choice interface",
-                       "each disabled unless selected",
+                       "each is disabled unless selected",
                        "wait for the selection before dependent work"):
             self.assertIn(phrase.casefold(), copied)
-        self.assertNotIn("choose simple or agent-based", copied)
+        self.assertIn("do not silently switch modes", copied)
 
     def test_discovery_policy_stays_in_skill(self):
         plan, = integration.plan_instruction_updates("user", None, ["getonmylevel-skill-discovery"])

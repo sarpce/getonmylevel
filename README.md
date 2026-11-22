@@ -10,7 +10,7 @@ Six skills for communication, context, engineering, design, software practices, 
 | --- | --- |
 | [Communication](skills/getonmylevel-communication/SKILL.md) | Clear, concise answers. |
 | [Context](skills/getonmylevel-context/SKILL.md) | Find relevant project context efficiently. |
-| [Engineering](skills/getonmylevel-engineering/SKILL.md) | Guide software work with direct defaults and optional agent-based workflows. |
+| [Engineering](skills/getonmylevel-engineering/SKILL.md) | Require a Simple or Agentic mode choice for software edits. |
 | [Design](skills/getonmylevel-design/SKILL.md) | Design deliberate, usable interfaces. |
 | [Good software engineering practices](skills/getonmylevel-good-software-engineering-practices/SKILL.md) | Keep software changes correct, secure, and maintainable. |
 | [Skill discovery](skills/getonmylevel-skill-discovery/SKILL.md) | Find useful available skills for each task. |
@@ -46,7 +46,7 @@ Use `--client claude` for Claude Code, `--dry-run` to preview, and `update` or `
 
 The Active by default checklist controls which installed skills the selected client is asked to read when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering` or `$getonmylevel-design`. Your instructions and higher-priority rules still apply.
 
-When the engineering skill is active, straightforward tasks proceed directly. For example, a one-line bug fix or documentation edit needs no workflow prompt. Agent-based work remains available when you request it or it would materially help under the active session's delegation rules. For a larger cross-module change, the engineering skill can use the configured designer and implementer roles. Independent review and testing remain separate choices, each disabled unless you select it. Higher-priority session instructions still apply.
+When the engineering skill is active, every new request involving a software edit requires a choice between Simple and Agentic modes before editing or delegating, including small fixes and documentation changes. Simple means working directly; Agentic uses agents when delegation is permitted. Independent review and testing are separate choices, each disabled unless selected. Activating the engineering skill adds a standing request for delegation in Agentic mode to the installer-managed instructions. If Agentic mode is unavailable, the user chooses how to proceed. Higher-priority session instructions still apply.
 
 The Agents tab can also copy an optional On/Off/Ask session preference block. It does not write that block to a file; merge it into your instructions yourself if wanted. See [session selector](optional/global-session-selector.md) for its scope.
 

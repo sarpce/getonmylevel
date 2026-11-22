@@ -87,11 +87,33 @@ def _current_block(names: list[str], kind: str, newline: str, client: str = "cod
     return newline.join(line for line in lines if line is not None)
 
 
-def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+def _prior_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
     old = _legacy_block(names, kind, newline, client)
     lines = old.split(newline)
     return newline.join(line for line in lines if not line.startswith("For each task,")
                         and not line.startswith("Honor explicit user changes"))
+
+
+def _delegation_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+    block = _prior_block(names, kind, newline, client)
+    if "getonmylevel-engineering" in names:
+        request = ("When the engineering skill applies, I request agent delegation for Agentic mode. "
+                   "Follow the skill's mode selection and review and testing choices, and respect "
+                   "higher-priority instructions and available tools.")
+        block = block.replace(END, request + newline + END)
+    return block
+
+
+def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+    block = _prior_block(names, kind, newline, client)
+    if "getonmylevel-engineering" in names:
+        request = ("## Agentic mode" + newline + newline +
+                   "To enable Agentic mode for a software task, choose Agentic when prompted or "
+                   "request it directly. I request delegation to sub-agents when Agentic mode is "
+                   "selected. Follow the engineering skill's mode selection and review and testing "
+                   "choices, subject to higher-priority instructions and available tools.")
+        block = block.replace(END, request + newline + END)
+    return block
 
 
 def _previous_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
@@ -158,7 +180,7 @@ def _parse_block(text: str, kind: str, newline: str, client: str = "codex") -> l
             if name not in common.SKILL_NAMES or name in names:
                 raise ValueError(f"Managed skill instruction block has an unknown or duplicate skill: {name!r}.")
             names.append(name)
-    if not names or body not in (_block(names, kind, newline, client), _current_block(names, kind, newline, client), _previous_block(names, kind, newline, client), _legacy_block(names, kind, newline, client)):
+    if not names or body not in (_block(names, kind, newline, client), _delegation_block(names, kind, newline, client), _prior_block(names, kind, newline, client), _current_block(names, kind, newline, client), _previous_block(names, kind, newline, client), _legacy_block(names, kind, newline, client)):
         raise ValueError("Managed skill instruction block was edited or is malformed; repair or remove it manually.")
     return names
 

@@ -104,7 +104,7 @@ def _delegation_block(names: list[str], kind: str, newline: str, client: str = "
     return block
 
 
-def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+def _previous_agentic_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
     block = _prior_block(names, kind, newline, client)
     if "getonmylevel-engineering" in names:
         request = ("## Agentic mode" + newline + newline +
@@ -114,6 +114,16 @@ def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> 
                    "choices, subject to higher-priority instructions and available tools.")
         block = block.replace(END, request + newline + END)
     return block
+
+
+def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
+    block = _previous_agentic_block(names, kind, newline, client)
+    guidance = ("## CodeGraph project context" + newline + newline +
+                "Whenever a task requires repository context, check whether the repository has a CodeGraph index. "
+                "If it does, use the index for relevant code exploration when available, and fall back to other tools if unavailable or insufficient. "
+                "If it does not, always inform the user that the project is not indexed and ask whether they want CodeGraph indexing to improve context navigation. "
+                "Do not install CodeGraph or initialize an index without the user's authorization. Continue independent work using available search and reads while the choice is pending; respect the user's answer and higher-priority instructions.")
+    return block.replace(END, guidance + newline + END)
 
 
 def _previous_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
@@ -180,7 +190,7 @@ def _parse_block(text: str, kind: str, newline: str, client: str = "codex") -> l
             if name not in common.SKILL_NAMES or name in names:
                 raise ValueError(f"Managed skill instruction block has an unknown or duplicate skill: {name!r}.")
             names.append(name)
-    if not names or body not in (_block(names, kind, newline, client), _delegation_block(names, kind, newline, client), _prior_block(names, kind, newline, client), _current_block(names, kind, newline, client), _previous_block(names, kind, newline, client), _legacy_block(names, kind, newline, client)):
+    if not names or body not in (_block(names, kind, newline, client), _previous_agentic_block(names, kind, newline, client), _delegation_block(names, kind, newline, client), _prior_block(names, kind, newline, client), _current_block(names, kind, newline, client), _previous_block(names, kind, newline, client), _legacy_block(names, kind, newline, client)):
         raise ValueError("Managed skill instruction block was edited or is malformed; repair or remove it manually.")
     return names
 

@@ -574,7 +574,8 @@ def _design_skill_plan(item_id: str, client: str = "codex") -> tuple[SuggestedIn
 
 def _design_skill_installer(plan: SuggestedInstallPlan) -> tuple[bool, str]:
     git, commit, source_path, *required_and_licenses = plan.data
-    required_count = len(_OPTIONAL_DESIGN_SKILLS[plan.id][4])
+    license_count = len(_OPTIONAL_DESIGN_SKILLS[plan.id][5])
+    required_count = len(required_and_licenses) - license_count
     required_paths = tuple(required_and_licenses[:required_count])
     license_paths = tuple(required_and_licenses[required_count:])
     destination = plan.destination

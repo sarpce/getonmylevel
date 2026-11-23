@@ -23,6 +23,7 @@ except ImportError as exc:
 from typing import Any
 
 import common
+import gui
 
 
 from agent_operations import (
@@ -34,7 +35,7 @@ from agent_operations import (
 
 
 class AgentConfigurator:
-    def __init__(self, root: tk.Tk, parent=None, close_command=None, configure_window: bool = True) -> None:
+    def __init__(self, root: tk.Tk, parent=None, close_command=None, configure_window: bool = True, aside=None) -> None:
         self.root = root
         if configure_window:
             root.title("getonmylevel · Skills and agents")
@@ -50,43 +51,30 @@ class AgentConfigurator:
         self.refreshing = False
         self.scope_conflicts: dict[str, list[tuple[str, str]]] = {}
 
-        outer = ttk.Frame(parent or root, padding=18)
+        outer = ttk.Frame(parent or root, padding=gui.PAGE_PADDING)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Agent roles", font=("Segoe UI", 20, "bold")).pack(anchor="w")
-        self.intro_label = ttk.Label(outer, text="Add focused helpers to Codex. Choose a role, then set its model and reasoning effort.",
-                                     style="Muted.TLabel", wraplength=900)
-        self.intro_label.pack(anchor="w", pady=(5, 16))
+        self.intro_label = gui.page_header(outer, "Agent roles",
+                                           "Add focused helpers to Codex. Choose a role, then set its model and reasoning effort.")
 
-        client_row = ttk.Frame(outer)
-        client_row.pack(fill="x", pady=(0, 8))
-        ttk.Label(client_row, text="Client:").pack(side="left")
-        for value, label in common.CLIENT_LABELS.items():
-            ttk.Radiobutton(client_row, text=label, value=value, variable=self.client,
-                            command=self.client_changed).pack(side="left", padx=6)
+        client_body = gui.section(outer, "1", "Client", "Role files are written in this client's agent format.")
+        gui.segmented(client_body, self.client, common.CLIENT_LABELS.items(), self.client_changed)
 
-        selector_row = ttk.Frame(outer)
-        selector_row.pack(fill="x", pady=(0, 8))
-        ttk.Label(selector_row, text="Skill session preference:").pack(side="left")
-        self.preference = tk.StringVar(value="Ask")
-        ttk.Combobox(selector_row, textvariable=self.preference, values=("On", "Off", "Ask"), state="readonly", width=8).pack(side="left", padx=8)
-        ttk.Button(selector_row, text="Copy session instruction block", command=self.copy_selector).pack(side="left")
-        ttk.Label(outer, text="Copies a block to the clipboard; global instructions are left unchanged.",
-                  style="Muted.TLabel").pack(anchor="w", pady=(0, 8))
-
-        scope_row = ttk.Frame(outer)
+        scope_body = gui.section(outer, "2", "Location",
+                                 "Global user roles apply everywhere. Repository roles are written into an existing repository you choose.")
+        scope_row = ttk.Frame(scope_body)
         scope_row.pack(fill="x")
-        ttk.Label(scope_row, text="Scope:").pack(side="left")
         self.scope = tk.StringVar(value="global")
         for label, value in (("Global user", "global"), ("Repository", "repo"), ("Both", "both")):
-            ttk.Radiobutton(scope_row, text=label, value=value, variable=self.scope, command=self.scope_changed).pack(side="left", padx=6)
+            ttk.Radiobutton(scope_row, text=label, value=value, variable=self.scope, command=self.scope_changed).pack(side="left", padx=(0, 18))
+        ttk.Label(scope_body, text="Target repository", style="Field.TLabel").pack(anchor="w", pady=(12, 4))
         self.repo_path = tk.StringVar()
-        repo_row = ttk.Frame(outer)
-        repo_row.pack(fill="x", pady=(8, 0))
+        repo_row = ttk.Frame(scope_body)
+        repo_row.pack(fill="x")
         ttk.Entry(repo_row, textvariable=self.repo_path).pack(side="left", fill="x", expand=True, padx=(0, 8))
         ttk.Button(repo_row, text="Browse…", command=self.browse_repo).pack(side="left")
 
-        ttk.Label(outer, text="Available roles", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(16, 8))
-        self.role_grid = ttk.Frame(outer)
+        roles_body = gui.section(outer, "3", "Roles", "Select the roles to write. Leave model or effort blank to keep the client's default behavior.")
+        self.role_grid = ttk.Frame(roles_body)
         self.role_grid.pack(fill="x")
         self.enabled: dict[str, tk.BooleanVar] = {}
         self.model_vars: dict[str, tk.StringVar] = {}
@@ -102,28 +90,27 @@ class AgentConfigurator:
         self.role_card_checks = {}
         self.role_card_descriptions = {}
         for role in common.AGENT_NAMES:
-            card = tk.Frame(self.role_grid, background="#FFFFFF", highlightthickness=1,
-                            highlightbackground="#D4D4D8", highlightcolor="#059669")
-            body = ttk.Frame(card, style="Card.TFrame", padding=12)
-            body.pack(fill="both", expand=True)
+            card, body = gui.tile(self.role_grid)
             self.enabled[role] = tk.BooleanVar(value=False)
             self.model_vars[role] = tk.StringVar()
             self.effort_vars[role] = tk.StringVar()
             title_row = ttk.Frame(body, style="Card.TFrame")
             title_row.pack(fill="x")
-            marker = ttk.Label(title_row, text="○", style="CardMarker.TLabel", width=2, anchor="center")
-            marker.pack(side="left", padx=(0, 4))
+            marker = ttk.Label(title_row, text="○", style="CardMarker.TLabel", width=2, anchor="w")
+            marker.pack(side="left")
             check = ttk.Checkbutton(title_row, text=role.title(), variable=self.enabled[role], command=self.refresh_preview,
                                     style="Card.TCheckbutton")
             check.pack(side="left", anchor="w", fill="x", expand=True)
             description = ttk.Label(body, text=self.templates[role]["description"], style="CardMuted.TLabel",
                                     wraplength=280, justify="left")
-            description.pack(anchor="w", fill="x", pady=(4, 10))
+            description.pack(anchor="w", fill="x", pady=(4, 12))
+            for widget in (card, body, title_row, marker, description):
+                widget.bind("<Button-1>", lambda _event, button=check: button.invoke())
             model_label = ttk.Label(body, text="Model · blank uses client default", style="CardMuted.TLabel")
             model_label.pack(anchor="w")
             self.model_labels[role] = model_label
             model = ttk.Combobox(body, textvariable=self.model_vars[role], values=("",), width=24)
-            model.pack(fill="x", pady=(3, 8))
+            model.pack(fill="x", pady=(3, 10))
             model.bind("<<ComboboxSelected>>", lambda _event, selected_role=role: self.model_changed(selected_role))
             model.bind("<KeyRelease>", lambda _event, selected_role=role: self.mark_field_dirty(selected_role, "model"))
             model.bind("<FocusOut>", lambda _event, selected_role=role: self.refresh_preview())
@@ -147,39 +134,63 @@ class AgentConfigurator:
             self.update_role_card(role)
         self.role_grid.bind("<Configure>", self.reflow_role_cards)
 
-        control_row = ttk.Frame(outer)
-        control_row.pack(fill="x", pady=8)
+        control_row = ttk.Frame(roles_body)
+        control_row.pack(fill="x", pady=(4, 0))
         self.refresh_button = ttk.Button(control_row, text="Refresh available models from Codex...", command=self.refresh_models)
         self.refresh_button.pack(anchor="w")
         self.refresh_status = tk.StringVar(value="Model discovery is optional. You can enter values manually.")
-        ttk.Label(control_row, textvariable=self.refresh_status, style="Muted.TLabel", wraplength=620).pack(anchor="w", pady=(5, 0))
+        self.refresh_status_label = ttk.Label(control_row, textvariable=self.refresh_status, style="Field.TLabel",
+                                              wraplength=620, justify="left")
+        self.refresh_status_label.pack(anchor="w", fill="x", pady=(6, 0))
 
-        ttk.Label(outer, text="Preview").pack(anchor="w", pady=(4, 4))
-        self.preview = tk.Text(outer, height=12, wrap="word", state="disabled", borderwidth=1,
-                               highlightthickness=1, highlightbackground="#D4D4D8", highlightcolor="#059669",
-                               padx=10, pady=8)
-        self.preview.pack(fill="both", expand=True)
-        button_row = ttk.Frame(outer)
-        button_row.pack(fill="x", pady=(10, 0))
+        selector_body = gui.section(outer, "4", "Session preference",
+                                    "Copies an On/Off/Ask instruction block to the clipboard. Global instructions are left unchanged.")
+        selector_row = ttk.Frame(selector_body)
+        selector_row.pack(fill="x")
+        ttk.Label(selector_row, text="Preference").pack(side="left")
+        self.preference = tk.StringVar(value="Ask")
+        ttk.Combobox(selector_row, textvariable=self.preference, values=("On", "Off", "Ask"), state="readonly", width=8).pack(side="left", padx=8)
+        ttk.Button(selector_row, text="Copy session instruction block", command=self.copy_selector).pack(side="left")
+
+        review = aside or outer
+        if aside is None:
+            ttk.Frame(outer, style="Rule.TFrame", height=1).pack(fill="x", pady=(20, 18))
+        self.summary_label = gui.review_header(review, "Agent files", "Only managed role files are written. No instruction file or client config is edited.")
+        button_row = ttk.Frame(review, style="Aside.TFrame")
+        button_row.pack(side="bottom", fill="x")
         ttk.Button(button_row, text="Write selected agent files…", command=self.write_selected,
-                   style="Primary.TButton").pack(side="right")
-        ttk.Button(button_row, text="Close", command=close_command or root.destroy).pack(side="right", padx=(0, 8))
+                   style="Primary.TButton").pack(fill="x", pady=(14, 0))
+        ttk.Button(button_row, text="Close", command=close_command or root.destroy, style="Quiet.TButton").pack(anchor="e", pady=(14, 0))
+        self.preview = gui.preview_text(review, height=12)
         self.scope_changed()
         self.poll_refresh()
-        outer.bind("<Configure>", self.fit_page_copy)
+        outer.bind("<Configure>", self.fit_page_copy, add="+")
 
     def fit_page_copy(self, event) -> None:
-        self.intro_label.configure(wraplength=max(240, event.width - 36))
+        self.refresh_status_label.configure(wraplength=max(240, event.width - 56))
+
+    def update_summary(self) -> None:
+        """Show a one-line summary of the current selection above the preview."""
+        label = getattr(self, "summary_label", None)
+        if label is None:
+            return
+        count = sum(variable.get() for variable in self.enabled.values())
+        scope = {"global": "Global user", "repo": "Repository", "both": "Global + repository"}[self.scope.get()]
+        label.configure(text="  ·  ".join((f"{count} of {len(self.enabled)} roles", scope, common.CLIENT_LABELS[self.client.get()])))
 
     def update_role_card(self, role: str) -> None:
         selected = self.enabled[role].get()
-        self.role_cards[role].configure(highlightbackground="#D4D4D8")
+        gui.set_tile_selected(self.role_cards[role], selected)
+        label_style = "Selected.CardMuted.TLabel" if selected else "CardMuted.TLabel"
         self.role_card_bodies[role].configure(style="Selected.Card.TFrame" if selected else "Card.TFrame")
         self.role_card_title_rows[role].configure(style="Selected.Card.TFrame" if selected else "Card.TFrame")
-        self.role_card_descriptions[role].configure(style="Selected.CardMuted.TLabel" if selected else "CardMuted.TLabel")
+        self.role_card_descriptions[role].configure(style=label_style)
+        self.model_labels[role].configure(style=label_style)
+        self.effort_labels[role].configure(style=label_style)
         self.role_card_markers[role].configure(text="✓" if selected else "○",
                                                style="Selected.CardMarker.TLabel" if selected else "CardMarker.TLabel")
         self.role_card_checks[role].configure(style="Selected.Card.TCheckbutton" if selected else "Card.TCheckbutton")
+        self.update_summary()
 
     def reflow_role_cards(self, event=None) -> None:
         width = event.width if event is not None else self.role_grid.winfo_width()
@@ -479,6 +490,7 @@ class AgentConfigurator:
         self.preview.delete("1.0", "end")
         self.preview.insert("1.0", "\n".join(lines))
         self.preview.configure(state="disabled")
+        self.update_summary()
 
     def write_selected(self) -> None:
         written: list[str] = []

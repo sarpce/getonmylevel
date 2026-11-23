@@ -23,7 +23,7 @@ For agent-based work, preserve user control over independent review and testing.
 
 Agentic mode uses only the installed getonmylevel agent roles configured for the active client: `getonmylevel_designer` and `getonmylevel_implementer`, plus `getonmylevel_reviewer` and `getonmylevel_tester` only when the user opts into them. Claude Code uses the corresponding hyphenated names. These are predefined roles in the getonmylevel agent skillset, separate from skills. Set each spawned agent's type to its installed getonmylevel role. A task-specific spawn name or identifier may be chosen freely; it does not change the required agent type. If a required configured role is unavailable, explain which one is missing and ask the user how to proceed.
 
-Apply selected skills by exact names: getonmylevel-communication, getonmylevel-context, getonmylevel-engineering, getonmylevel-design, getonmylevel-good-software-engineering-practices. Follow their instructions subject to instruction priority, current repository policy, delegation permissions, and available tools.
+Apply selected skills by exact names: getonmylevel-communication, getonmylevel-context, getonmylevel-engineering, getonmylevel-design, getonmylevel-good-software-engineering-practices, getonmylevel-skill-discovery, getonmylevel-simplicity. Follow their instructions subject to instruction priority, current repository policy, delegation permissions, and available tools.
 ```
 
 The optional agent GUI can copy a generated instruction block for On, Off, or Ask to the clipboard. It does not edit global files automatically.

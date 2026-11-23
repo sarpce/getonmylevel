@@ -1,4 +1,4 @@
-"""Configure optional getonmylevel roles for Codex, Claude Code, and GitHub Copilot."""
+"""Configure optional getonmylevel roles for Codex, Claude Code, GitHub Copilot, and OpenCode."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from agent_operations import (
     CLAUDE_EFFORTS, CLAUDE_MODELS, REPO_ROOT, AppServer, agent_filename,
     claude_expected, copilot_models, load_templates, parse_claude_managed_file,
     parse_copilot_managed_file, parse_managed_file, perform_role_plan, role_plan,
-    render_copilot_agent,
+    opencode_model_suggestions, parse_opencode_managed_file, render_copilot_agent,
 )
 
 
@@ -42,8 +42,8 @@ class AgentConfigurator:
             root.minsize(760, 620)
         self.templates = load_templates()
         self.client = tk.StringVar(value="codex")
-        self.client_values = {"codex": {}, "claude": {}, "copilot": {}}
-        self.dirty_fields: dict[str, set[tuple[str, str]]] = {"codex": set(), "claude": set(), "copilot": set()}
+        self.client_values = {"codex": {}, "claude": {}, "copilot": {}, "opencode": {}}
+        self.dirty_fields: dict[str, set[tuple[str, str]]] = {"codex": set(), "claude": set(), "copilot": set(), "opencode": set()}
         self.previous_client = "codex"
         self.model_choices: dict[str, dict[str, list[str]]] = {"codex": {}, "copilot": {}}
         self.refresh_queue: queue.Queue[tuple[str, bool, Any]] = queue.Queue()
@@ -60,7 +60,7 @@ class AgentConfigurator:
         client_row = ttk.Frame(outer)
         client_row.pack(fill="x", pady=(0, 8))
         ttk.Label(client_row, text="Client:").pack(side="left")
-        for label, value in (("Codex", "codex"), ("Claude Code", "claude"), ("GitHub Copilot", "copilot")):
+        for value, label in common.CLIENT_LABELS.items():
             ttk.Radiobutton(client_row, text=label, value=value, variable=self.client,
                             command=self.client_changed).pack(side="left", padx=6)
 
@@ -237,6 +237,11 @@ class AgentConfigurator:
             dirty = self.dirty_fields["claude"]
             models = {role: self.model_vars[role].get() for role in roles if (role, "model") in dirty}
             efforts = {role: self.effort_vars[role].get() for role in roles if (role, "effort") in dirty}
+        elif self.client.get() == "opencode":
+            # Only explicitly edited models are written; existing models are preserved on update.
+            dirty = self.dirty_fields["opencode"]
+            models = {role: self.model_vars[role].get() for role in roles if (role, "model") in dirty}
+            efforts = {}
         else:
             # Keep the established Codex and Copilot form semantics unchanged.
             models = {role: self.model_vars[role].get() for role in roles}
@@ -265,8 +270,9 @@ class AgentConfigurator:
                 for root in roots:
                     path = root / agent_filename(role, self.client.get())
                     if path.exists() and not path.is_symlink():
-                        parser = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file}.get(self.client.get(), parse_managed_file)
-                        expected = claude_expected(role, self.templates[role]) if self.client.get() in ("claude", "copilot") else self.templates[role]
+                        parser = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file,
+                                  "opencode": parse_opencode_managed_file}.get(self.client.get(), parse_managed_file)
+                        expected = claude_expected(role, self.templates[role]) if self.client.get() in ("claude", "copilot", "opencode") else self.templates[role]
                         candidates.append(parser(path, expected))
                 if candidates and len(set(candidates)) == 1:
                     model, effort = candidates[0]
@@ -274,11 +280,19 @@ class AgentConfigurator:
                     self.effort_vars[role].set(effort)
                 elif candidates:
                     self.scope_conflicts[role] = candidates
+            if self.client.get() == "opencode":
+                suggestions = opencode_model_suggestions(roots)
+                for role in common.AGENT_NAMES:
+                    self.model_widgets[role]["values"] = suggestions
         except (OSError, ValueError, tomllib.TOMLDecodeError):
             # Preview displays the issue. Do not change values on a failed read.
             pass
 
     def model_changed(self, role: str) -> None:
+        if self.client.get() == "opencode":
+            self.mark_field_dirty(role, "model")
+            self.refresh_preview()
+            return
         if self.client.get() == "claude":
             self.mark_field_dirty(role, "model")
             self.effort_widgets[role]["values"] = CLAUDE_EFFORTS
@@ -306,7 +320,12 @@ class AgentConfigurator:
         client = self.client.get()
         claude = client == "claude"
         copilot = client == "copilot"
-        if claude:
+        opencode = client == "opencode"
+        if opencode:
+            intro = "Add subagents to OpenCode. Set a model as provider/model-id, optionally with #variant, or leave it blank to omit the field."
+            status = ("OpenCode model discovery is not available here; enter provider/model-id manually. Suggestions come only from existing managed OpenCode agent files. "
+                      "Choose reasoning through a model variant (provider/model-id#variant); variant names depend on the model.")
+        elif claude:
             intro = "Add focused helpers to Claude Code. Set each role's model and effort independently."
             status = ("Aliases and Claude API IDs are suggestions, not an availability check; enter any supported model ID. Blank model omits the field; "
                       "inherit explicitly uses the spawning conversation's model. Blank effort omits the field and follows Claude Code's runtime resolution. "
@@ -318,14 +337,20 @@ class AgentConfigurator:
             intro = "Add focused helpers to Codex. Choose a role, then set its model and reasoning effort."
             status = "Model discovery is optional. You can enter values manually."
         self.intro_label.configure(text=intro)
-        self.refresh_button.configure(text="Built-in suggestions; manual entry available" if claude else f"Refresh available models from {'Copilot' if copilot else 'Codex'}...")
-        self.refresh_button.configure(state="disabled" if claude or self.refreshing else "normal")
+        if opencode:
+            self.refresh_button.configure(text="Manual entry; no model discovery for OpenCode")
+        else:
+            self.refresh_button.configure(text="Built-in suggestions; manual entry available" if claude else f"Refresh available models from {'Copilot' if copilot else 'Codex'}...")
+        self.refresh_button.configure(state="disabled" if claude or opencode or self.refreshing else "normal")
         self.refresh_status.set(status)
         for role in common.AGENT_NAMES:
             model, effort = self.client_values[client].get(role, ("", ""))
             self.model_vars[role].set(model)
-            self.effort_vars[role].set("" if copilot else effort)
-            if claude:
+            self.effort_vars[role].set("" if copilot or opencode else effort)
+            if opencode:
+                self.model_labels[role].configure(text="Model · provider/model-id; blank omits")
+                self.effort_labels[role].configure(text="Effort · use a #variant on the model")
+            elif claude:
                 self.model_labels[role].configure(text="Model · blank omits; inherit uses parent model")
                 self.effort_labels[role].configure(text="Effort · blank omits; Claude resolves at runtime")
             elif copilot:
@@ -334,7 +359,11 @@ class AgentConfigurator:
             else:
                 self.model_labels[role].configure(text="Model · blank uses client default")
                 self.effort_labels[role].configure(text="Effort · blank uses default")
-            if claude:
+            if opencode:
+                self.model_widgets[role]["values"] = [""]
+                self.effort_widgets[role]["values"] = [""]
+                self.effort_widgets[role].configure(state="disabled")
+            elif claude:
                 self.model_widgets[role]["values"] = CLAUDE_MODELS
                 self.effort_widgets[role]["values"] = CLAUDE_EFFORTS
                 self.effort_widgets[role].configure(state="normal")
@@ -350,7 +379,7 @@ class AgentConfigurator:
 
     def refresh_models(self) -> None:
         client = self.client.get()
-        if client == "claude" or self.refreshing:
+        if client in ("claude", "opencode") or self.refreshing:
             return
         self.refreshing = True
         self.refresh_button.configure(state="disabled")
@@ -382,7 +411,7 @@ class AgentConfigurator:
         if ok:
             self.model_choices[client] = value
         if client != self.client.get():
-            self.refresh_button.configure(state="disabled" if self.client.get() == "claude" else "normal")
+            self.refresh_button.configure(state="disabled" if self.client.get() in ("claude", "opencode") else "normal")
             self.root.after(150, self.poll_refresh)
             return
         if ok:
@@ -407,6 +436,19 @@ class AgentConfigurator:
                 if self.client.get() == "copilot":
                     lines.append("\nModel (blank means inherit client default):")
                     lines.extend(f"  {role}: model={self.model_vars[role].get() or '(inherit)'}" for role in roles)
+                elif self.client.get() == "opencode":
+                    # Same planner as the write action; blank model omits the field and mode is always subagent.
+                    _planned_roles, _planned_roots, _templates, entries = self.plan()
+                    lines.append("\nOpenCode fields (blank omits model; mode is always subagent):")
+                    for role, path, content in entries:
+                        frontmatter = content.split("---\n", 2)[1]
+                        values = {}
+                        for field in frontmatter.splitlines():
+                            key, separator, value = field.partition(": ")
+                            if separator:
+                                values[key] = json.loads(value)
+                        lines.append(f"  {role} ({path}): model={values.get('model', '(omitted)')}")
+                    lines.append("Reasoning is chosen through a model variant suffix (#variant); variant names depend on the model.")
                 elif self.client.get() == "claude":
                     # Use the same planner as the write action so invalid selections and
                     # unmanaged or edited destination files are visible before confirmation.

@@ -1,10 +1,12 @@
 """Tests for pinned optional installer behavior without external installers."""
 
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import suggested_installers as installers
@@ -399,3 +401,118 @@ class PinnedInstallerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class OpenCodeSuggestedTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.home = self.base / "home"
+        self.home.mkdir()
+        home_patch = patch.object(Path, "home", return_value=self.home)
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
+        env = patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.base / "elsewhere-claude")}, clear=False)
+        env.start()
+        self.addCleanup(env.stop)
+        git = patch.object(installers, "_git_path", return_value="/usr/bin/git")
+        git.start()
+        self.addCleanup(git.stop)
+        self.own_root = self.home / ".config" / "opencode" / "skills"
+
+    def make_copy(self, root: Path, name: str) -> Path:
+        copy = root / name
+        copy.mkdir(parents=True, exist_ok=True)
+        (copy / "SKILL.md").write_text("skill", encoding="utf-8")
+        return copy
+
+    def test_opencode_destinations_for_all_four_skills_are_opencode_owned(self):
+        ids = ["last30days", "impeccable", "ui_ux_pro_max", "anti_ui_slop"]
+        plans, error = installers.plan_selected(ids, "opencode")
+        self.assertIsNone(error)
+        self.assertEqual(sorted(plan.id for plan in plans), sorted(ids))
+        for plan in plans:
+            with self.subTest(item=plan.id):
+                self.assertEqual(plan.destination.parent, self.own_root)
+        impeccable = next(plan for plan in plans if plan.id == "impeccable")
+        self.assertEqual(impeccable.data[2], ".opencode/skills/impeccable")
+        self.assertEqual(impeccable.data[3:6], ("SKILL.md", "reference", "scripts"))
+        ui_ux = next(plan for plan in plans if plan.id == "ui_ux_pro_max")
+        self.assertIn("Its OpenCode skill path", ui_ux.details)
+        details = installers.integration_details("ui_ux_pro_max", client="opencode")
+        self.assertIn("OpenCode", details)
+
+    def test_opencode_refuses_last30_when_claude_or_agents_copy_exists(self):
+        import shutil
+
+        for label, root in (("claude", self.home / ".claude" / "skills"), ("agents", self.home / ".agents" / "skills")):
+            with self.subTest(copy=label):
+                copy = self.make_copy(root, "last30days")
+                plan, error = installers._last30_plan("opencode")
+                self.assertIsNone(plan)
+                self.assertIn("Already installed", error)
+                self.assertIn("OpenCode also discovers", error)
+                shutil.rmtree(copy)
+
+    def test_opencode_status_and_removal_ignore_other_client_copies(self):
+        own = self.make_copy(self.own_root, "last30days")
+        self.make_copy(self.home / ".claude" / "skills", "last30days")
+        self.assertEqual(installers.suggested_status("opencode")["last30days"], (own,))
+        plan, error = installers.plan_removal("last30days", "opencode")
+        self.assertIsNone(error)
+        self.assertEqual(tuple(path for path, _identity in plan.destinations), (own,))
+
+    def test_opencode_root_aliasing_blocks_removal_in_every_direction(self):
+        self.make_copy(self.own_root, "last30days")
+        with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.home / ".config" / "opencode")}):
+            plan, error = installers.plan_removal("last30days", "opencode")
+            self.assertIsNone(plan)
+            self.assertIn("OpenCode and Claude skill roots", error)
+            self.assertIn("same physical path", error)
+            plan, error = installers.plan_removal("last30days", "claude")
+            self.assertIsNone(plan)
+            self.assertIn("same physical path", error)
+            removal = installers.SuggestedRemovalPlan("last30days", "Last 30 Days research skill", (), client="opencode")
+            results = installers.remove_selected([removal])
+        self.assertFalse(results[0][1])
+        self.assertIn("same physical path", results[0][2])
+
+    def test_codex_install_notes_an_existing_opencode_copy(self):
+        self.make_copy(self.own_root, "last30days")
+        plan, error = installers._last30_plan("codex")
+        self.assertIsNone(error)
+        self.assertIn("OpenCode also discovers", plan.details)
+
+    def test_opencode_cli_anything_and_status_text_are_manual(self):
+        plans, error = installers.plan_selected(["cli_anything"], "opencode")
+        self.assertIsNone(plans)
+        self.assertIn("OpenCode", error)
+        self.assertIn("manual", error)
+        details = installers.integration_details("cli_anything", client="opencode")
+        self.assertIn("OpenCode action unavailable", details)
+
+    def test_gui_refresh_for_opencode_disables_only_cli_anything(self):
+        from unittest.mock import Mock
+        import install_gui
+
+        installer = install_gui.Installer.__new__(install_gui.Installer)
+        installer.client = type("Variable", (), {"get": lambda self: "opencode"})()
+        installer.suggested_labels = {}
+        installer.suggested_selected = {}
+        installer.suggested_actions = {}
+        installer.suggested_busy = False
+        installer.suggested_refresh_button = Mock()
+        for item in installers.SUGGESTED_ITEMS:
+            check, detail, selected = Mock(), Mock(), Mock()
+            installer.suggested_labels[item.id] = (check, detail)
+            installer.suggested_selected[item.id] = selected
+        with patch.object(installers, "suggested_status", return_value={
+            "rtk": None, **{item.id: () for item in installers.SUGGESTED_ITEMS if item.id != "rtk"}
+        }):
+            installer.refresh_suggested_status()
+        for item_id, (check, _) in installer.suggested_labels.items():
+            with self.subTest(item_id=item_id):
+                if item_id == "rtk":
+                    continue
+                self.assertEqual(check.configure.call_args.kwargs["state"],
+                                 "disabled" if item_id == "cli_anything" else "normal")

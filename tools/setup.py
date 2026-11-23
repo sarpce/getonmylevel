@@ -31,7 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="area", required=True)
     roles = commands.add_parser("roles", help="manage optional agent role files")
     roles.add_argument("action", choices=("install", "update", "remove"))
-    roles.add_argument("--client", choices=("codex", "claude", "copilot"), default="codex")
+    roles.add_argument("--client", choices=common.CLIENTS, default="codex")
     roles.add_argument("--scope", choices=("global", "repo", "both"), default="global")
     roles.add_argument("--repo", help="existing target repository for repo or both scope")
     roles.add_argument("--roles", nargs="+", choices=common.AGENT_NAMES, required=True)
@@ -42,13 +42,13 @@ def _parser() -> argparse.ArgumentParser:
 
     graph = commands.add_parser("codegraph", help="inspect or configure CodeGraph globally")
     graph.add_argument("action", choices=("status", "setup"))
-    graph.add_argument("--client", choices=("codex", "claude", "copilot"), default="codex")
+    graph.add_argument("--client", choices=common.CLIENTS, default="codex")
     graph.add_argument("--dry-run", action="store_true")
     graph.add_argument("--yes", action="store_true", help="confirm network install and global client configuration")
 
     integrations = commands.add_parser("suggested", help="manage suggested skills and tools")
     integrations.add_argument("action", choices=("status", "install", "remove"))
-    integrations.add_argument("--client", choices=("codex", "claude", "copilot"), default="codex")
+    integrations.add_argument("--client", choices=common.CLIENTS, default="codex")
     integrations.add_argument("--items", nargs="+", choices=tuple(item.id for item in suggested.SUGGESTED_ITEMS))
     integrations.add_argument("--dry-run", action="store_true")
     integrations.add_argument("--yes", action="store_true", help="confirm third-party install or suggested integration removal")
@@ -193,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{'Remove' if args.action == 'remove' else 'Install/update'}: {role}: {path}")
                 if args.action != "remove":
                     print(f"  model: {models.get(role, 'preserve existing; inherit client default for new files')}")
-                    if args.client != "copilot":
+                    if args.client not in ("copilot", "opencode"):
                         print(f"  effort: {efforts.get(role, 'preserve existing; inherit client default for new files')}")
             print("Execution: atomic per-file managed role update; no network or third-party code; no backup files are created.")
             if args.dry_run:

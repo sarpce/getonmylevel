@@ -187,3 +187,34 @@ class CodeGraphInstallTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class OpenCodeCodeGraphTests(unittest.TestCase):
+    class Variable:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    def test_opencode_install_args_and_label(self):
+        self.assertEqual(codegraph_installer.install_args("opencode"),
+                         ("install", "--target=opencode", "--location=global", "--yes"))
+        self.assertEqual(codegraph_installer._client_label("opencode"), "OpenCode")
+
+    def test_opencode_codegraph_only_selection_plans_global_opencode_target(self):
+        installer = install_gui.Installer.__new__(install_gui.Installer)
+        installer.client = self.Variable("opencode")
+        installer.selected = {"getonmylevel-context": self.Variable(False)}
+        installer.codegraph_selected = self.Variable(True)
+        installer.scope = self.Variable("repo")
+        installer.repo_path = self.Variable("")
+        plan = codegraph_installer.CodeGraphPlan(("codegraph",), None, "existing")
+        with patch.object(codegraph_installer, "plan_install", return_value=plan) as plan_install, \
+             patch.object(install_gui.common, "skill_roots", side_effect=AssertionError("skill scope is irrelevant")):
+            names, roots, copies, instructions, selected_plan = installer.selections()
+        plan_install.assert_called_once_with("opencode")
+        self.assertEqual((names, roots, copies, instructions), ([], [], [], []))
+        self.assertIs(selected_plan, plan)

@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import threading
 import tomllib
-from typing import Any
+from typing import Any, Iterable
 
 import common
 
@@ -364,15 +364,76 @@ def claude_expected(role: str, template: dict[str, str]) -> dict[str, str]:
 
 
 COPILOT_MARKER = "<!-- Managed by getonmylevel for GitHub Copilot. -->"
+OPENCODE_MARKER = "<!-- Managed by getonmylevel for OpenCode. -->"
+_OPENCODE_MODEL = re.compile(r"[^\s/#]+/[^\s#]+(?:#[^\s#]+)?")
+_OPENCODE_EFFORT = ("OpenCode does not support a separate reasoning effort{role}. Choose a model variant in the model value "
+                    "instead, for example provider/model-id#variant; variant names depend on the model.")
+
+
+def validate_opencode_model(model: str) -> None:
+    if model and not _OPENCODE_MODEL.fullmatch(model):
+        raise ValueError(f"OpenCode models must be written as provider/model-id, optionally followed by #variant: {model!r}")
+
+
+def render_opencode_agent(expected: dict[str, str], model: str, effort: str = "") -> str:
+    if effort:
+        raise ValueError(_OPENCODE_EFFORT.format(role=""))
+    validate_opencode_model(model)
+    fields = [f"description: {_claude_yaml_string(expected['description'])}", 'mode: "subagent"']
+    if model:
+        fields.append(f"model: {_claude_yaml_string(model)}")
+    return "---\n" + "\n".join(fields) + "\n---\n" + OPENCODE_MARKER + "\n" + expected["developer_instructions"].rstrip() + "\n"
+
+
+def parse_opencode_managed_file(path: Path, expected: dict[str, str]) -> tuple[str, str]:
+    if common.is_link_or_reparse(path):
+        raise ValueError(f"Refusing to update linked or reparse-point file: {path}")
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    if len(lines) < 6 or lines[0] != "---":
+        raise ValueError(f"Existing file is not an OpenCode agent managed by this tool: {path}")
+    try:
+        end = lines.index("---", 1)
+    except ValueError as exc:
+        raise ValueError(f"OpenCode agent frontmatter is malformed: {path}") from exc
+    fields = {}
+    for line in lines[1:end]:
+        match = re.fullmatch(r"(description|mode|model): (\"(?:[^\"\\]|\\.)*\")", line)
+        if not match or match.group(1) in fields:
+            raise ValueError(f"OpenCode agent frontmatter has unexpected or malformed fields: {path}")
+        fields[match.group(1)] = json.loads(match.group(2))
+    body = "\n".join(lines[end + 1:])
+    expected_body = OPENCODE_MARKER + "\n" + expected["developer_instructions"].rstrip()
+    if fields.get("description") != expected["description"] or fields.get("mode") != "subagent" or body != expected_body:
+        raise ValueError(f"Existing file was edited outside model settings; refusing to replace: {path}")
+    return fields.get("model", ""), ""
+
+
+def opencode_model_suggestions(roots: Iterable[Path]) -> tuple[str, ...]:
+    """Offer only models already present in managed OpenCode agent files under the selected roots."""
+    templates = load_templates()
+    found: list[str] = []
+    for root in roots:
+        for role in common.AGENT_NAMES:
+            path = root / agent_filename(role, "opencode")
+            try:
+                if common.is_link_or_reparse(path) or not path.is_file():
+                    continue
+                model, _effort = parse_opencode_managed_file(path, claude_expected(role, templates[role]))
+            except (OSError, ValueError, UnicodeError):
+                continue
+            if model and model not in found:
+                found.append(model)
+    return ("", *found)
 
 
 def agent_filename(role: str, client: str) -> str:
-    if role not in common.AGENT_NAMES or client not in ("codex", "claude", "copilot"):
+    if role not in common.AGENT_NAMES or client not in common.CLIENTS:
         raise ValueError("Unknown agent role or client.")
     if client == "copilot":
         return f"getonmylevel-{role}.agent.md"
-    separator = "-" if client == "claude" else "_"
-    extension = "md" if client == "claude" else "toml"
+    separator = "-" if client in ("claude", "opencode") else "_"
+    extension = "md" if client in ("claude", "opencode") else "toml"
     return f"getonmylevel{separator}{role}.{extension}"
 
 
@@ -463,17 +524,18 @@ def role_plan(client: str, scope: str, repo: Path | None, roles: list[str],
         common.check_managed_root(root)
         for role in roles:
             path = root / agent_filename(role, client)
-            snapshot = _role_file_snapshot(path) if client == "claude" else None
-            if client != "claude" and common.is_link_or_reparse(path):
+            snapshot = _role_file_snapshot(path) if client in ("claude", "opencode") else None
+            if client not in ("claude", "opencode") and common.is_link_or_reparse(path):
                 raise ValueError(f"Refusing linked or reparse-point destination path: {path}")
-            expected = claude_expected(role, templates[role]) if client in ("claude", "copilot") else templates[role]
-            parser = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file}.get(client, parse_managed_file)
+            expected = claude_expected(role, templates[role]) if client in ("claude", "copilot", "opencode") else templates[role]
+            parser = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file,
+                      "opencode": parse_opencode_managed_file}.get(client, parse_managed_file)
             existing_model, existing_effort = ("", "")
             if path.exists():
                 existing_model, existing_effort = parser(path, expected)
-            if client == "claude" and _role_file_snapshot(path) != snapshot:
+            if client in ("claude", "opencode") and _role_file_snapshot(path) != snapshot:
                 raise ValueError(f"Destination changed while preparing role configuration: {path}")
-            if client == "claude":
+            if client in ("claude", "opencode"):
                 snapshots[path] = snapshot
             if action == "remove":
                 if not path.exists():
@@ -484,11 +546,14 @@ def role_plan(client: str, scope: str, repo: Path | None, roles: list[str],
             effort = efforts.get(role, existing_effort).strip()
             if client == "copilot" and effort:
                 raise ValueError(f"GitHub Copilot does not support reasoning effort for {role}.")
+            if client == "opencode" and effort:
+                raise ValueError(_OPENCODE_EFFORT.format(role=f" for {role}"))
             if client == "claude" and effort and effort not in CLAUDE_EFFORTS[1:]:
                 raise ValueError(
                     f"Unsupported Claude Code effort '{effort}' for {role}. Choose low, medium, high, xhigh, or max."
                 )
-            renderer = {"claude": render_claude_agent, "copilot": render_copilot_agent}.get(client, render_agent)
+            renderer = {"claude": render_claude_agent, "copilot": render_copilot_agent,
+                        "opencode": render_opencode_agent}.get(client, render_agent)
             planned.append((role, path, renderer(expected, model, effort)))
     return RolePlan(planned, snapshots=snapshots)
 
@@ -497,20 +562,22 @@ def perform_role_plan(plan: list[tuple[str, Path, str | None]], client: str, act
     """Apply a role plan, returning completed paths and backup paths (currently none)."""
     completed: list[str] = []
     templates = load_templates()
-    parsers = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file}
+    parsers = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file,
+               "opencode": parse_opencode_managed_file}
     try:
         snapshots = getattr(plan, "snapshots", None)
-        if client == "claude" and snapshots is not None:
+        if client in ("claude", "opencode") and snapshots is not None:
             # Check every destination before changing any file. In particular, an
             # absent-at-plan-time target must remain absent to prevent late clobbers.
+            label = "Claude" if client == "claude" else "OpenCode"
             for _role, path, _content in plan:
                 if path not in snapshots or _role_file_snapshot(path) != snapshots[path]:
-                    raise ValueError(f"Claude agent destination changed since planning; refusing to overwrite: {path}")
+                    raise ValueError(f"{label} agent destination changed since planning; refusing to overwrite: {path}")
         for role, path, content in plan:
             common.check_managed_root(path.parent)
             if common.is_link_or_reparse(path):
                 raise ValueError(f"Refusing linked or reparse-point destination path: {path}")
-            expected = claude_expected(role, templates[role]) if client in ("claude", "copilot") else templates[role]
+            expected = claude_expected(role, templates[role]) if client in ("claude", "copilot", "opencode") else templates[role]
             parser = parsers.get(client, parse_managed_file)
             if action == "remove":
                 if not path.exists():

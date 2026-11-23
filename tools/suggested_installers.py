@@ -84,13 +84,19 @@ def integration_details(item_id: str, locations=(), *, detection_error: str | No
     existing = "Existing installed version: unknown. Provenance: unknown; ownership by getonmylevel is not established by presence alone."
     if item_id == "rtk":
         existing = "Installed version: unknown. Provenance: unknown; this project does not manage that command."
-    if client in ("codex", "claude") and item_id not in ("rtk", "cli_anything"):
+    if client in ("codex", "claude", "opencode") and item_id not in ("rtk", "cli_anything"):
         destination = _skill_roots(client)[0] / ({"last30days": "last30days", **{key: val[0] for key, val in _OPTIONAL_DESIGN_SKILLS.items()}}.get(item_id, item_id))
-        status += f"\nSelected client: {'Claude Code' if client == 'claude' else 'Codex'}; destination: {destination}"
+        status += f"\nSelected client: {common.CLIENT_LABELS[client]}; destination: {destination}"
+        if client == "opencode":
+            outside = _outside_opencode_root(_discovered_copies(item_id, client))
+            if outside:
+                status += f"\nOpenCode also discovers existing copies at: {', '.join(map(str, outside))}; a second copy is not installed."
     elif item_id == "cli_anything" and client == "codex":
         status += f"\nSelected client: Codex; destination: {_cli_destination()}"
     elif item_id == "cli_anything" and client == "claude":
         status += "\nClaude Code action unavailable: the selected pin ships a marketplace plugin; manage it with Claude Code's /plugin interface."
+    elif item_id == "cli_anything" and client == "opencode":
+        status += "\nOpenCode action unavailable: the selected pin ships OpenCode slash commands, not a skill; install them manually from the upstream README's OpenCode section."
     requirements = ("Prerequisites: Git and network access; CLI-Anything also runs the selected upstream shell installer." if item_id == "cli_anything" and client == "codex" else
                     "Prerequisites: Git and network access for pinned skill copies." if item_id not in ("rtk",) and not (item_id == "cli_anything" and client == "claude") else
                     "Prerequisites: manual installation from upstream.")
@@ -98,20 +104,22 @@ def integration_details(item_id: str, locations=(), *, detection_error: str | No
                "Network activity: fetches only the selected Git commit after confirmation." if item_id not in ("rtk", "cli_anything") else
                "Network activity: none by this GUI; manual upstream installation may access the network.")
     adaptation = {
-        "ui_ux_pro_max": ("Client adaptation: replaces Claude plugin-root paths with a skill-directory-relative path." if client == "claude" else "Client adaptation: the Codex skill path is adapted from the pinned Claude skill examples."),
-        "impeccable": ("Client adaptation: copies the pinned Claude skill payload; optional hooks are not configured." if client == "claude" else "Client adaptation: copies the pinned Codex skill payload; optional hooks are not configured."),
-        "cli_anything": ("Client adaptation: unavailable; the selected Claude distribution is a marketplace plugin." if client == "claude" else "Client adaptation: runs the pinned Codex skill installer."),
+        "ui_ux_pro_max": ("Client adaptation: replaces Claude plugin-root paths with a skill-directory-relative path." if client == "claude" else "Client adaptation: the OpenCode skill path is adapted from the pinned Claude skill examples." if client == "opencode" else "Client adaptation: the Codex skill path is adapted from the pinned Claude skill examples."),
+        "impeccable": ("Client adaptation: copies the pinned Claude skill payload; optional hooks are not configured." if client == "claude" else "Client adaptation: copies the pinned OpenCode skill payload; optional hooks are not configured." if client == "opencode" else "Client adaptation: copies the pinned Codex skill payload; optional hooks are not configured."),
+        "cli_anything": ("Client adaptation: unavailable; the selected Claude distribution is a marketplace plugin." if client == "claude" else "Client adaptation: unavailable; the selected pin provides OpenCode commands, not a skill." if client == "opencode" else "Client adaptation: runs the pinned Codex skill installer."),
         "rtk": "Client adaptation: standalone tool, manual only.",
     }.get(item_id, "Client adaptation: copies the selected skill payload without changing client configuration.")
     if item_id == "cli_anything" and client == "claude":
         requirements = "Prerequisites: Claude Code marketplace support; manual installation only."
-    elif item_id == "rtk":
+    elif item_id == "rtk" or (item_id == "cli_anything" and client == "opencode"):
         requirements = "Prerequisites: manual installation from upstream."
     if item_id == "cli_anything" and client == "claude":
         network = "Network activity: none by this GUI; manual marketplace setup accesses upstream."
     effects = _INTEGRATION_EFFECTS[item_id]
     if item_id == "cli_anything" and client == "claude":
         effects = "No automatic action is offered. Manual marketplace installation adds and enables the upstream Claude plugin; manage and remove it through Claude Code's /plugin interface."
+    if item_id == "cli_anything" and client == "opencode":
+        effects = "No automatic action is offered. Manual installation copies the upstream OpenCode command files into an OpenCode commands directory; this tool does not manage or remove them."
     return "\n".join((f"Upstream project: {item.upstream_url}", status, selected, existing, requirements, network,
                        adaptation, "Installation effects: " + effects))
 
@@ -225,6 +233,8 @@ def _safe_destination(path: Path) -> None:
 
 
 def _skill_roots(client: str = "codex") -> tuple[Path, ...]:
+    if client == "opencode":
+        return (_opencode_skill_root(),)
     if client == "claude":
         configured = os.environ.get("CLAUDE_CONFIG_DIR")
         return ((Path(configured).expanduser() if configured else Path.home() / ".claude") / "skills",)
@@ -242,21 +252,86 @@ def _skill_roots(client: str = "codex") -> tuple[Path, ...]:
     return tuple(result)
 
 
-def _skill_destinations(item_id: str, client: str = "codex") -> tuple[Path, ...]:
-    name = {"last30days": "last30days", "cli_anything": "cli-anything",
+def _opencode_skill_root() -> Path:
+    return Path.home() / ".config" / "opencode" / "skills"
+
+
+def _opencode_discovery_roots() -> tuple[Path, ...]:
+    """Roots OpenCode scans for skills: its own root plus the literal Claude and agents locations."""
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for root in (_opencode_skill_root(), Path.home() / ".claude" / "skills", Path.home() / ".agents" / "skills"):
+        normalized = root.resolve(strict=False)
+        if normalized not in seen:
+            seen.add(normalized)
+            result.append(root)
+    return tuple(result)
+
+
+def _skill_name(item_id: str) -> str | None:
+    return {"last30days": "last30days", "cli_anything": "cli-anything",
             **{key: value[0] for key, value in _OPTIONAL_DESIGN_SKILLS.items()}}.get(item_id)
+
+
+def _discovered_copies(item_id: str, client: str = "codex") -> tuple[Path, ...]:
+    """Copies that make a new install a duplicate; OpenCode scans more roots than it owns."""
+    if client != "opencode":
+        return _skill_destinations(item_id, client)
+    name = _skill_name(item_id)
+    if name is None or item_id == "cli_anything":
+        return ()
+    return tuple(root / name for root in _opencode_discovery_roots() if _is_present(root / name))
+
+
+def _outside_opencode_root(paths) -> list[Path]:
+    own = os.path.normcase(os.path.abspath(_opencode_skill_root()))
+    return [path for path in paths if os.path.normcase(os.path.abspath(path.parent)) != own]
+
+
+def _already_installed_error(existing, client: str = "codex") -> str:
+    message = "Already installed at " + ", ".join(map(str, existing))
+    if client == "opencode" and _outside_opencode_root(existing):
+        message += (". OpenCode also discovers skills in ~/.claude/skills and ~/.agents/skills, "
+                    "so another copy would duplicate it.")
+    return message
+
+
+def _opencode_duplicate_note(destination: Path) -> str:
+    """Note when a Codex or Claude install lands where OpenCode also discovers skills."""
+    parent = os.path.normcase(os.path.abspath(destination.parent))
+    shared = {os.path.normcase(os.path.abspath(Path.home() / ".claude" / "skills")),
+              os.path.normcase(os.path.abspath(Path.home() / ".agents" / "skills"))}
+    if parent not in shared:
+        return ""
+    existing = _opencode_skill_root() / destination.name
+    if not _is_present(existing):
+        return ""
+    return (f" OpenCode also discovers {destination.parent} and already has its own copy at {existing}; "
+            "after this install OpenCode will see both copies.")
+
+
+def _opencode_alias_error() -> str | None:
+    own = _opencode_skill_root().resolve(strict=False)
+    for other, label in (("codex", "Codex"), ("claude", "Claude")):
+        if any(own == path.resolve(strict=False) for path in _skill_roots(other)):
+            return f"OpenCode and {label} skill roots resolve to the same physical path. Refusing ambiguous removal."
+    return None
+
+
+def _skill_destinations(item_id: str, client: str = "codex") -> tuple[Path, ...]:
+    name = _skill_name(item_id)
     if name is None:
         return ()
     # CLI-Anything is deliberately not installed as a Claude skill; its pinned
     # Claude distribution is a marketplace plugin with a distinct lifecycle.
-    if client == "claude" and item_id == "cli_anything":
+    if client in ("claude", "opencode") and item_id == "cli_anything":
         return ()
     return tuple(root / name for root in _skill_roots(client) if _is_present(root / name))
 
 
 def _ensure_no_alternate_install(item_id: str, destination: Path, client: str = "codex") -> None:
     target = os.path.normcase(os.path.abspath(destination))
-    others = [path for path in _skill_destinations(item_id, client)
+    others = [path for path in _discovered_copies(item_id, client)
               if os.path.normcase(os.path.abspath(path)) != target]
     if others:
         raise FileExistsError("The skill appeared in another supported location: " + ", ".join(map(str, others)))
@@ -293,8 +368,10 @@ def plan_removal(item_id: str, client: str = "codex") -> tuple[SuggestedRemovalP
         return None, "A Claude marketplace plugin is registered. Remove it using Claude Code's /plugin interface; this tool never removes plugin caches."
     own_root = _skill_roots(client)[0].resolve(strict=False)
     other_client = "codex" if client == "claude" else "claude"
-    if any(own_root == path.resolve(strict=False) for path in _skill_roots(other_client)):
+    if client in ("codex", "claude") and any(own_root == path.resolve(strict=False) for path in _skill_roots(other_client)):
         return None, "Claude and Codex skill roots resolve to the same physical path. Refusing ambiguous removal."
+    if (error := _opencode_alias_error()):
+        return None, error
     paths = _skill_destinations(item_id, client)
     if not paths:
         return None, "The skill is no longer installed in the supported locations. Refresh and try again."
@@ -343,6 +420,9 @@ def remove_selected(plans: list[SuggestedRemovalPlan]) -> list[tuple[str, bool, 
             claude_root = _skill_roots("claude")[0].resolve(strict=False)
             if any(claude_root == root.resolve(strict=False) for root in _skill_roots("codex")):
                 raise ValueError("Claude and Codex skill roots resolve to the same physical path. Refusing ambiguous removal.")
+            error = _opencode_alias_error()
+            if error:
+                raise ValueError(error)
             if plan.client == "claude":
                 if plan.id in _claude_plugin_status():
                     raise FileExistsError("A Claude marketplace plugin is registered; remove it through Claude Code's /plugin interface.")
@@ -404,9 +484,9 @@ def _last30_plan(client: str = "codex") -> tuple[SuggestedInstallPlan | None, st
     if client == "claude" and "last30days" in _claude_plugin_status():
         return None, "A Claude marketplace plugin is already registered. Use Claude Code's /plugin interface to manage it."
     destination = _skill_roots(client)[0] / "last30days"
-    existing = _skill_destinations("last30days", client)
+    existing = _discovered_copies("last30days", client)
     if existing:
-        return None, "Already installed at " + ", ".join(map(str, existing))
+        return None, _already_installed_error(existing, client)
     try:
         _safe_destination(destination)
     except (OSError, ValueError) as exc:
@@ -420,6 +500,8 @@ def _last30_plan(client: str = "codex") -> tuple[SuggestedInstallPlan | None, st
     details = (f"Installs the complete Last 30 Days skill directory user-wide from selected commit {LAST30_COMMIT}. "
                f"Requires Git; the installer verifies checkout HEAD before copying. Candidate pin, not claimed integration-tested. "
                f"The copied skill is not executed. Upstream: {LAST30_URL}.")
+    if client in ("codex", "claude"):
+        details += _opencode_duplicate_note(destination)
     return SuggestedInstallPlan("last30days", "Last 30 Days research skill", destination, details, commands,
                                 data=(os.path.abspath(git),), client=client), None
 
@@ -457,7 +539,7 @@ def _install_last30(plan: SuggestedInstallPlan) -> tuple[bool, str]:
                 shutil.rmtree(stage_parent, ignore_errors=True)
     except (OSError, ValueError) as exc:
         return False, f"Installation failed: {exc}. Check for partial changes at {destination}."
-    return True, f"Installed {destination}. Restart {('Claude Code' if plan.client == 'claude' else 'Codex')} to discover the skill."
+    return True, f"Installed {destination}. Restart {common.CLIENT_LABELS[plan.client]} to discover the skill."
 
 
 def _cli_destination() -> Path:
@@ -534,6 +616,9 @@ def _design_skill_plan(item_id: str, client: str = "codex") -> tuple[SuggestedIn
     git = _git_path()
     if not git:
         return None, f"Git is required. Install manually from {url}."
+    if client == "opencode" and item_id == "impeccable":
+        source_path = ".opencode/skills/impeccable"
+        required_paths = ("SKILL.md", "reference", "scripts")
     if client == "claude" and item_id == "impeccable":
         source_path = ".claude/skills/impeccable"
         # This selected Claude payload has SKILL.md, reference/, and scripts/;
@@ -542,9 +627,9 @@ def _design_skill_plan(item_id: str, client: str = "codex") -> tuple[SuggestedIn
     if client == "claude" and item_id in _claude_plugin_status():
         return None, "A Claude marketplace plugin is already registered. Use Claude Code's /plugin interface to manage it."
     destination = _skill_roots(client)[0] / name
-    existing = _skill_destinations(item_id, client)
+    existing = _discovered_copies(item_id, client)
     if existing:
-        return None, "Already installed at " + ", ".join(map(str, existing))
+        return None, _already_installed_error(existing, client)
     try:
         _safe_destination(destination)
     except (OSError, ValueError) as exc:
@@ -565,9 +650,14 @@ def _design_skill_plan(item_id: str, client: str = "codex") -> tuple[SuggestedIn
                       " Client adaptation: rewrites the upstream Claude plugin-root examples to `{SKILL_DIR}` and instructs the user to resolve that to the installed skill directory.")
     elif item_id == "impeccable":
         adaptation = f" Client adaptation: copies the selected `{source_path}` skill payload; optional hooks are not configured."
+    effects = _DESIGN_SKILL_EFFECTS[item_id]
+    if client == "opencode":
+        effects = effects.replace("Its Codex skill path", "Its OpenCode skill path")
     details = (f"Installs the complete {description} from selected commit {commit} to {destination}. Requires Git and network access. "
                f"The installer verifies checkout HEAD and checks the selected skill files for symlinks before copying. "
-               f"It does not execute the downloaded skill or configure hooks. {_DESIGN_SKILL_EFFECTS[item_id]}{adaptation} Upstream: {url}.")
+               f"It does not execute the downloaded skill or configure hooks. {effects}{adaptation} Upstream: {url}.")
+    if client in ("codex", "claude"):
+        details += _opencode_duplicate_note(destination)
     return SuggestedInstallPlan(item_id, description, destination, details, commands,
                                 data=(os.path.abspath(git), commit, source_path, *required_paths, *license_paths), client=client), None
 
@@ -628,7 +718,7 @@ def _design_skill_installer(plan: SuggestedInstallPlan) -> tuple[bool, str]:
                 shutil.rmtree(stage_parent, ignore_errors=True)
     except (OSError, ValueError) as exc:
         return False, f"Installation failed: {exc}. Check for partial changes at {destination}."
-    return True, f"Installed {destination}. Restart {('Claude Code' if plan.client == 'claude' else 'Codex')} to discover the skill."
+    return True, f"Installed {destination}. Restart {common.CLIENT_LABELS[plan.client]} to discover the skill."
 
 
 def _impeccable_plan():
@@ -705,7 +795,10 @@ def plan_selected(selected_ids: list[str], client: str = "codex") -> tuple[list[
         if client == "claude" and item_id == "cli_anything":
             errors.append("CLI-Anything: Claude support at the selected pin is a marketplace plugin, not the Codex skill installer. Install manually with Claude Code: /plugin marketplace add HKUDS/CLI-Anything then follow its cli-anything-plugin instructions.")
             continue
-        if client == "claude" and item_id == "rtk":
+        if client == "opencode" and item_id == "cli_anything":
+            errors.append("CLI-Anything: the selected pin provides OpenCode slash commands (opencode-commands/) rather than a skill. Install them manually by following the OpenCode section of the upstream README: https://github.com/HKUDS/CLI-Anything")
+            continue
+        if client in ("claude", "opencode") and item_id == "rtk":
             errors.append("RTK remains manual-installation only.")
             continue
         if item_id == "last30days":

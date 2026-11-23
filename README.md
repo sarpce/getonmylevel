@@ -1,6 +1,6 @@
 # getonmylevel
 
-**A set of practical instructions and optional agent roles for Codex, Claude Code, and GitHub Copilot CLI and VS Code.** Install only the skills you want, choose whether the client should read them by default, and add role templates when your client supports them.
+**A set of practical instructions and optional agent roles for Codex, Claude Code, GitHub Copilot CLI and VS Code, and OpenCode.** Install only the skills you want, choose whether the client should read them by default, and add role templates when your client supports them.
 
 The seven skills cover communication, project context, software engineering, interface design, skill discovery, and focused solutions. The optional designer, implementer, reviewer, and tester roles provide separate agent profiles for supported clients. These are instructions and templates: client behavior, available tools, and higher-priority instructions determine what can run.
 
@@ -28,7 +28,7 @@ cd getonmylevel
 python tools/install.py install --client codex --scope user
 ```
 
-This installs the seven bundled skills for Codex. Use `--client claude` or `--client copilot` for the other supported clients. Installation does not activate skills. See [scriptable installation](INSTALL.md#scriptable-installation) for selection, scope, updates, removal, and activation.
+This installs the seven bundled skills for Codex. Use `--client claude`, `--client copilot`, or `--client opencode` for the other supported clients. Installation does not activate skills. See [scriptable installation](INSTALL.md#scriptable-installation) for selection, scope, updates, removal, and activation.
 
 ## Install, then activate
 
@@ -72,21 +72,21 @@ Optional **designer**, **implementer**, **reviewer**, and **tester** templates c
 
 ## Supported clients
 
-| Capability | Codex | Claude Code | GitHub Copilot CLI and VS Code |
-| --- | --- | --- | --- |
-| Bundled skills and managed instructions | Yes | Yes | Yes |
-| Optional role profiles | TOML | Markdown subagents | `.agent.md` profiles |
-| Role model settings | Model and effort | Model and effort | Model only; no reasoning effort |
-| CodeGraph setup | Global Codex configuration | Global Claude Code configuration | Configures CLI and VS Code together |
-| Suggested integrations | Skills and tools; RTK manual | Four skill copies; CLI-Anything plugin and RTK manual | Not available |
+| Capability | Codex | Claude Code | GitHub Copilot CLI and VS Code | OpenCode |
+| --- | --- | --- | --- | --- |
+| Bundled skills and managed instructions | Yes | Yes | Yes | Yes; repository `AGENTS.md` block shared with Codex |
+| Optional role profiles | TOML | Markdown subagents | `.agent.md` profiles | Markdown subagents (`mode: subagent`) |
+| Role model settings | Model and effort | Model and effort | Model only; no reasoning effort | Model only (`provider/model-id`, optional `#variant`); no separate effort |
+| CodeGraph setup | Global Codex configuration | Global Claude Code configuration | Configures CLI and VS Code together | Global OpenCode configuration |
+| Suggested integrations | Skills and tools; RTK manual | Four skill copies; CLI-Anything plugin and RTK manual | Not available | Four skill copies; CLI-Anything commands and RTK manual |
 
-See [client capabilities and paths](INSTALL.md#client-capabilities-and-paths) for destinations and scope behavior. All three support bundled skills and optional roles; integrations differ by client as shown above.
+See [client capabilities and paths](INSTALL.md#client-capabilities-and-paths) for destinations and scope behavior. All four support bundled skills and optional roles; integrations differ by client as shown above.
 
 ## Optional integrations
 
 CodeGraph is an independent, optional global setup for all supported clients. It can provide code navigation through an MCP server; it does not initialize or index a project. Selecting the context skill does not install CodeGraph. Setup may download npm packages and change the selected client's MCP configuration and managed instructions; Node.js and npm are needed if CodeGraph must be installed.
 
-Suggested integrations include Last 30 Days, CLI-Anything, Impeccable, UI UX Pro Max, Anti UI Slop, and RTK. Four skills can be copied for Codex and Claude Code. CLI-Anything's Codex skill uses an upstream installer; Claude uses its marketplace plugin. RTK installation is manual, and suggested integration actions are unavailable for Copilot. Review the [integration details](INSTALL.md#suggested-skillsets-and-tools) for prerequisites, pinned revisions, licenses, and installation effects.
+Suggested integrations include Last 30 Days, CLI-Anything, Impeccable, UI UX Pro Max, Anti UI Slop, and RTK. Four skills can be copied for Codex, Claude Code, and OpenCode. CLI-Anything's Codex skill uses an upstream installer; Claude uses its marketplace plugin, and OpenCode uses manually installed upstream commands. RTK installation is manual, and suggested integration actions are unavailable for Copilot. Review the [integration details](INSTALL.md#suggested-skillsets-and-tools) for prerequisites, pinned revisions, licenses, and installation effects.
 
 ## More information
 

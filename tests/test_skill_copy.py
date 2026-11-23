@@ -198,3 +198,92 @@ class SkillScopeTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+class OpenCodeLayoutTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.home = self.base / "home"
+        self.repo = self.base / "repo"
+        self.home.mkdir()
+        self.repo.mkdir()
+        other = self.base / "other"
+        env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(other / "xdg"),
+                                           "OPENCODE_CONFIG_DIR": str(other / "opencode-config"),
+                                           "CLAUDE_CONFIG_DIR": str(other / "claude"),
+                                           "CODEX_HOME": str(other / "codex")}, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        home = mock.patch.object(Path, "home", return_value=self.home)
+        home.start()
+        self.addCleanup(home.stop)
+
+    def test_opencode_paths_ignore_xdg_and_other_client_env(self):
+        opencode = self.home / ".config" / "opencode"
+        self.assertEqual(common.skill_roots("user", None, "opencode"), [opencode / "skills"])
+        self.assertEqual(common.skill_roots("repo", self.repo, "opencode"), [self.repo / ".opencode" / "skills"])
+        self.assertEqual(common.skill_roots("both", self.repo, "opencode"),
+                         [opencode / "skills", self.repo / ".opencode" / "skills"])
+        self.assertEqual(common.agent_roots("global", None, "opencode"), [opencode / "agents"])
+        self.assertEqual(common.agent_roots("repo", self.repo, "opencode"), [self.repo / ".opencode" / "agents"])
+        plans = integration.plan_instruction_updates("both", self.repo, common.SKILL_NAMES[:1], "opencode")
+        self.assertEqual([plan.path for plan in plans], [opencode / "AGENTS.md", self.repo / "AGENTS.md"])
+
+    def test_check_managed_root_opencode_layout_accepts_plain_paths(self):
+        opencode = self.home / ".config" / "opencode"
+        common.check_managed_root(opencode / "skills")
+        common.check_managed_root(opencode / "agents")
+        common.check_managed_root(self.repo / ".opencode" / "skills")
+
+    def _assert_linked_layout_refused(self, link: Path, target: Path, probe: Path):
+        target.mkdir(parents=True, exist_ok=True)
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"Directory symlinks unavailable: {exc}")
+        with self.assertRaisesRegex(ValueError, "Refusing linked"):
+            common.check_managed_root(probe)
+
+    def test_check_managed_root_refuses_linked_opencode_config_segment(self):
+        (self.home).mkdir(exist_ok=True)
+        self._assert_linked_layout_refused(self.home / ".config", self.base / "real-config",
+                                           self.home / ".config" / "opencode" / "skills")
+
+    def test_check_managed_root_refuses_linked_opencode_directory(self):
+        (self.home / ".config").mkdir(parents=True)
+        self._assert_linked_layout_refused(self.home / ".config" / "opencode", self.base / "real-opencode",
+                                           self.home / ".config" / "opencode" / "skills")
+
+    def test_check_managed_root_refuses_linked_repo_opencode_directory(self):
+        self._assert_linked_layout_refused(self.repo / ".opencode", self.base / "real-repo-opencode",
+                                           self.repo / ".opencode" / "skills")
+
+    def test_install_cli_opencode_dry_run_prints_destinations_and_writes_nothing(self):
+        import contextlib
+        import io
+        import install
+
+        instructions = self.repo / "AGENTS.md"
+        instructions.write_text("Intro\n" + integration._block(common.SKILL_NAMES[:1], "repo", "\n", "codex") + "\n",
+                                encoding="utf-8")
+        before = instructions.read_bytes()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = install.main(["install", "--client", "opencode", "--scope", "both",
+                                 "--repo", str(self.repo), "--dry-run"])
+        text = output.getvalue()
+        self.assertEqual(code, 0, text)
+        name = common.SKILL_NAMES[0]
+        self.assertIn(str(self.home / ".config" / "opencode" / "skills" / name), text)
+        self.assertIn(str(self.repo / ".opencode" / "skills" / name), text)
+        self.assertFalse((self.home / ".config").exists())
+        self.assertFalse((self.repo / ".opencode").exists())
+        self.assertEqual(instructions.read_bytes(), before)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = install.main(["activate", "--client", "opencode", "--scope", "repo", "--repo", str(self.repo),
+                                 "--skills", name, "--dry-run"])
+        self.assertEqual(code, 0, output.getvalue())
+        self.assertIn(f"Instructions (Update): {instructions}", output.getvalue())
+        self.assertEqual(instructions.read_bytes(), before)

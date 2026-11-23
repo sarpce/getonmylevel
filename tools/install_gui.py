@@ -55,7 +55,7 @@ class Installer:
         client_row.pack(fill="x", pady=(0, 8))
         ttk.Label(client_row, text="Client:").pack(side="left")
         self.client_buttons = []
-        for label, value in (("Codex", "codex"), ("Claude Code", "claude"), ("GitHub Copilot", "copilot")):
+        for value, label in common.CLIENT_LABELS.items():
             button = ttk.Radiobutton(client_row, text=label, value=value, variable=self.client,
                                      command=self.client_changed)
             button.pack(side="left", padx=6)
@@ -106,7 +106,7 @@ class Installer:
         codegraph_card = ttk.LabelFrame(outer, text="Recommended tool", style="Card.TLabelframe")
         codegraph_card.pack(fill="x", pady=(12, 0))
         self.codegraph_selected = tk.BooleanVar(value=False)
-        self.codegraph_by_client = {"codex": False, "claude": False, "copilot": False}
+        self.codegraph_by_client = {"codex": False, "claude": False, "copilot": False, "opencode": False}
         codegraph_row = ttk.Frame(codegraph_card, style="Card.TFrame")
         codegraph_row.pack(fill="x")
         self.codegraph_marker = ttk.Label(codegraph_row, text="○", style="CardMarker.TLabel", width=2, anchor="center")
@@ -155,7 +155,7 @@ class Installer:
 
         suggested_box = ttk.LabelFrame(outer, text="Suggested skillsets and tools", padding=8)
         suggested_box.pack(fill="x", pady=(10, 0))
-        self.suggested_description = ttk.Label(suggested_box, text="Optional user-wide skill copies for Codex or Claude Code. CLI-Anything Claude plugin and RTK installation remain manual.",
+        self.suggested_description = ttk.Label(suggested_box, text="Optional user-wide skill copies for Codex, Claude Code, or OpenCode. CLI-Anything (Claude plugin or OpenCode commands) and RTK installation remain manual.",
                                                wraplength=600, style="Muted.TLabel")
         self.suggested_description.pack(anchor="w")
         self.suggested_selected = {item.id: tk.BooleanVar(value=False) for item in suggested_installers.SUGGESTED_ITEMS}
@@ -465,6 +465,10 @@ class Installer:
                                        if plugin_locations else "Unavailable: the selected pin provides a Claude marketplace plugin; install it through Claude Code's /plugin interface."))
                 check.configure(text=f"{item.name} (manual Claude plugin installation)", state="disabled")
                 self.suggested_selected[item_id].set(False)
+            elif item_id == "cli_anything" and self.selected_client() == "opencode":
+                detail.configure(text="Unavailable: the selected pin provides OpenCode commands, not a skill; install them manually from the upstream OpenCode instructions.")
+                check.configure(text=f"{item.name} (manual OpenCode command installation)", state="disabled")
+                self.suggested_selected[item_id].set(False)
             elif locations:
                 plugins = [path for path in locations if Path(path).name == "installed_plugins.json"]
                 copies = [path for path in locations if Path(path).name != "installed_plugins.json"]
@@ -474,11 +478,11 @@ class Installer:
                 if plugins:
                     bits.append("Claude marketplace plugin registered at " + ", ".join(map(str, plugins)) + "; remove through /plugin")
                 detail.configure(text=" · ".join(bits))
-                enabled = self.selected_client() in ("codex", "claude") and not self.suggested_busy and not plugins
+                enabled = self.selected_client() in ("codex", "claude", "opencode") and not self.suggested_busy and not plugins
                 check.configure(text=f"Remove {item.name}", state="normal" if enabled else "disabled")
             else:
                 detail.configure(text="Not detected in supported locations · new install uses pinned commit" if item_id != "rtk" else item.description)
-                enabled = self.selected_client() in ("codex", "claude") and not self.suggested_busy and (item_id != "cli_anything" or self.selected_client() == "codex")
+                enabled = self.selected_client() in ("codex", "claude", "opencode") and not self.suggested_busy and (item_id != "cli_anything" or self.selected_client() == "codex")
                 suffix = " (Claude marketplace plugin; manual install)" if item_id == "cli_anything" and self.selected_client() == "claude" else ""
                 check.configure(text=f"Install {item.name}{suffix}", state="normal" if enabled else "disabled")
         self.suggested_refresh_button.configure(state="disabled" if self.suggested_busy else "normal")
@@ -712,9 +716,11 @@ class Installer:
                     lines.append(f"  {scope}: activate {', '.join(added) or '(none)'}; deactivate {', '.join(removed) or '(none)'}")
                 lines.extend(f"  Required installation (available on request): {item.destination}" for item in required)
                 lines.extend(f"  {item.action} managed instructions: {item.path}" for item in activation_plans)
+            if client == "opencode":
+                lines.append("\nOpenCode notes: repository AGENTS.md is shared with Codex; only OpenCode's list changes and any Codex list there is preserved. OpenCode also discovers skills in ~/.claude/skills, ~/.agents/skills, .claude/skills, and .agents/skills, so copies installed there for other clients also appear in OpenCode.")
             if wants_codegraph:
                 codegraph_plan = codegraph_installer.plan_install(self.selected_client())
-                client_name = {"claude": "Claude Code", "copilot": "GitHub Copilot CLI and VS Code", "codex": "Codex"}[self.selected_client()]
+                client_name = {"claude": "Claude Code", "copilot": "GitHub Copilot CLI and VS Code", "codex": "Codex", "opencode": "OpenCode"}[self.selected_client()]
                 lines.extend(["", "CodeGraph: optional user-wide tool", codegraph_plan.details,
                               f"  Configures {client_name} globally, including MCP configuration and managed instructions.",
                               f"  No project indexing or initialization will run. Restart {client_name} if needed."])
@@ -748,7 +754,7 @@ class Installer:
             if names:
                 confirmation += "\n\nThis installs or updates skill files for explicit use. It does not select them for default use; use Active by default to change managed instructions."
             client = self.selected_client()
-            client_name = {"claude": "Claude Code", "copilot": "GitHub Copilot", "codex": "Codex"}[client]
+            client_name = {"claude": "Claude Code", "copilot": "GitHub Copilot", "codex": "Codex", "opencode": "OpenCode"}[client]
 
             if codegraph_plan:
                 confirmation += (f"\n\nCodeGraph is an optional user-wide tool. It may download packages and will configure {client_name} globally, including its MCP configuration and managed instructions. "

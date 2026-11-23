@@ -10,6 +10,9 @@ import tempfile
 from dataclasses import dataclass
 from typing import Iterable
 
+CLIENTS = ("codex", "claude", "copilot", "opencode")
+CLIENT_LABELS = {"codex": "Codex", "claude": "Claude Code", "copilot": "GitHub Copilot", "opencode": "OpenCode"}
+
 
 SKILL_NAMES = (
     "getonmylevel-communication",
@@ -84,9 +87,12 @@ def is_link_or_reparse(path: Path) -> bool:
 def check_managed_root(root: Path) -> None:
     """Reject linked/reparse points at the selected base and managed path segments."""
     expanded = root.expanduser()
-    if expanded.parent.name in (".agents", ".codex", ".claude", ".copilot", ".github"):
+    if expanded.parent.name in (".agents", ".codex", ".claude", ".copilot", ".github", ".opencode"):
         base = expanded.parent.parent
         managed = (expanded.parent, expanded)
+    elif expanded.parent.name == "opencode" and expanded.parent.parent.name == ".config":
+        base = expanded.parent.parent.parent
+        managed = (expanded.parent.parent, expanded.parent, expanded)
     elif expanded.name in ("agents", "skills"):
         base = expanded.parent
         managed = (expanded,)
@@ -259,9 +265,9 @@ def copy_skills(copies: Iterable[SkillCopy]) -> SkillCopyResult:
 
 
 def skill_roots(scope: str, repo_root: Path | None, client: str = "codex") -> list[Path]:
-    if client not in ("codex", "claude", "copilot"):
+    if client not in CLIENTS:
         raise ValueError(f"Unknown client: {client}")
-    home = {"codex": ".agents", "claude": ".claude", "copilot": ".github"}[client]
+    home = {"codex": ".agents", "claude": ".claude", "copilot": ".github", "opencode": ".opencode"}[client]
     roots: list[Path] = []
     if scope in ("user", "both"):
         user_root = Path.home()
@@ -270,6 +276,8 @@ def skill_roots(scope: str, repo_root: Path | None, client: str = "codex") -> li
         if client == "copilot":
             user_root = Path.home() / ".copilot"
             roots.append(user_root / "skills")
+        elif client == "opencode":
+            roots.append(Path.home() / ".config" / "opencode" / "skills")
         else:
             roots.append(user_root / home / "skills" if client == "codex" or not os.environ.get("CLAUDE_CONFIG_DIR") else user_root / "skills")
     if scope in ("repo", "both"):
@@ -282,7 +290,7 @@ def skill_roots(scope: str, repo_root: Path | None, client: str = "codex") -> li
 
 
 def agent_roots(scope: str, repo_root: Path | None, client: str = "codex") -> list[Path]:
-    if client not in ("codex", "claude", "copilot"):
+    if client not in CLIENTS:
         raise ValueError(f"Unknown client: {client}")
     roots: list[Path] = []
     if scope in ("global", "both"):
@@ -291,13 +299,15 @@ def agent_roots(scope: str, repo_root: Path | None, client: str = "codex") -> li
             roots.append((Path(config_home).expanduser() if config_home else Path.home() / ".claude") / "agents")
         elif client == "copilot":
             roots.append(Path.home() / ".copilot" / "agents")
+        elif client == "opencode":
+            roots.append(Path.home() / ".config" / "opencode" / "agents")
         else:
             codex_home = os.environ.get("CODEX_HOME")
             roots.append((Path(codex_home).expanduser() if codex_home else Path.home() / ".codex") / "agents")
     if scope in ("repo", "both"):
         if repo_root is None or not repo_root.is_dir():
             raise ValueError("Choose an existing target repository for repository scope.")
-        roots.append(repo_root / ({"claude": ".claude", "codex": ".codex", "copilot": ".github"}[client]) / "agents")
+        roots.append(repo_root / ({"claude": ".claude", "codex": ".codex", "copilot": ".github", "opencode": ".opencode"}[client]) / "agents")
     if scope not in ("global", "repo", "both"):
         raise ValueError(f"Unknown agent configuration scope: {scope}")
     return validate_roots(roots)

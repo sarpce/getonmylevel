@@ -574,3 +574,218 @@ class InstructionIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class OpenCodeInstructionTests(unittest.TestCase):
+    HEAD = ("<!-- getonmylevel-skills:begin -->\n## getonmylevel skills\n\n"
+            "By default, at the start of each conversation, read the following installed skill instructions and follow them as relevant to the task. "
+            "Codex and OpenCode share this block: use only the list for the client you are running in.\n\n"
+            "Codex:\n- `.agents/skills/getonmylevel-engineering/SKILL.md`\n\n"
+            "OpenCode:\n- `.opencode/skills/getonmylevel-communication/SKILL.md`\n\n"
+            "These paths are relative to the repository root.\n## Agentic mode\n")
+    ROLE = "Claude Code uses the corresponding hyphenated names."
+    OPENCODE_ROLE = "Claude Code, GitHub Copilot, and OpenCode use the corresponding hyphenated names."
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.home = self.base / "home"
+        self.repo = self.base / "repo"
+        self.home.mkdir()
+        self.repo.mkdir()
+        env = mock.patch.dict(os.environ, {"CODEX_HOME": str(self.home / ".codex"),
+                                           "CLAUDE_CONFIG_DIR": str(self.home / ".claude")})
+        env.start()
+        self.addCleanup(env.stop)
+        home = mock.patch.object(Path, "home", return_value=self.home)
+        home.start()
+        self.addCleanup(home.stop)
+        self.agents = self.repo / "AGENTS.md"
+        self.codex_names = [common.SKILL_NAMES[0], common.SKILL_NAMES[2]]  # communication, engineering
+        self.opencode_names = [common.SKILL_NAMES[1]]  # context
+
+    def write(self, text: str, path: Path | None = None) -> None:
+        (path or self.agents).write_bytes(text.encode("utf-8"))
+
+    def read(self, path: Path | None = None) -> str:
+        return (path or self.agents).read_bytes().decode("utf-8")
+
+    def activate(self, scope: str, names: list[str], client: str):
+        plans = integration.plan_instruction_updates(scope, self.repo, names, client)
+        integration.write_instruction_updates(plans, client)
+        return plans
+
+    def test_opencode_repo_and_user_blocks_use_opencode_paths(self):
+        names = self.opencode_names
+        repo_plan = integration.plan_instruction_updates("repo", self.repo, names, "opencode")[0]
+        expected = (integration._block(names, "repo", "\n", "codex").replace(".agents/skills/", ".opencode/skills/")
+                    .replace(self.ROLE, self.OPENCODE_ROLE) + "\n").encode("utf-8")
+        self.assertEqual(repo_plan.proposed, expected)
+        user_plan = integration.plan_instruction_updates("user", None, names, "opencode")[0]
+        self.assertEqual(user_plan.path, self.home / ".config" / "opencode" / "AGENTS.md")
+        expected_user = (integration._block(names, "user", "\n", "codex").replace("~/.agents/skills/", "~/.config/opencode/skills/")
+                         .replace(self.ROLE, self.OPENCODE_ROLE) + "\n").encode("utf-8")
+        self.assertEqual(user_plan.proposed, expected_user)
+
+    def test_codex_only_repo_activation_is_unchanged(self):
+        plan = integration.plan_instruction_updates("repo", self.repo, self.codex_names, "codex")[0]
+        self.assertEqual(plan.proposed, (integration._block(self.codex_names, "repo", "\n", "codex") + "\n").encode("utf-8"))
+
+    def test_shared_block_lifecycle_and_active_lists(self):
+        codex_block = integration._block(self.codex_names, "repo", "\n", "codex")
+        self.write("Intro\n" + codex_block + "\n")
+        self.activate("repo", self.opencode_names, "opencode")
+        shared = integration._shared_block(self.codex_names, self.opencode_names, "\n")
+        self.assertEqual(self.read(), "Intro\n" + shared + "\n")
+        self.assertEqual(integration.active_skills("repo", self.repo, "codex"), {"repo": self.codex_names})
+        self.assertEqual(integration.active_skills("repo", self.repo, "opencode"), {"repo": self.opencode_names})
+        # Removing Codex leaves only the OpenCode block; re-adding and removing OpenCode restores the Codex-only block.
+        self.activate("repo", [], "codex")
+        self.assertEqual(self.read(), "Intro\n" + integration._block(self.opencode_names, "repo", "\n", "opencode") + "\n")
+        self.activate("repo", self.codex_names, "codex")
+        self.activate("repo", [], "opencode")
+        self.assertEqual(self.read(), "Intro\n" + integration._block(self.codex_names, "repo", "\n", "codex") + "\n")
+        plans = integration.plan_instruction_removals("repo", self.repo, "codex")
+        integration.write_instruction_removals(plans, "codex")
+        self.assertEqual(self.read(), "Intro\n")
+
+    def test_remove_selected_keeps_the_other_client_list(self):
+        self.write("Intro\n" + integration._shared_block(self.codex_names, self.opencode_names, "\n") + "\n")
+        plans = integration.plan_selected_removals("repo", self.repo, self.opencode_names, "opencode")
+        integration.write_instruction_removals(plans, "opencode")
+        self.assertEqual(self.read(), "Intro\n" + integration._block(self.codex_names, "repo", "\n", "codex") + "\n")
+        self.write("Intro\n" + integration._shared_block(self.codex_names, self.opencode_names, "\n") + "\n")
+        plans = integration.plan_selected_removals("repo", self.repo, self.codex_names, "codex")
+        integration.write_instruction_removals(plans, "codex")
+        self.assertEqual(self.read(), "Intro\n" + integration._block(self.opencode_names, "repo", "\n", "opencode") + "\n")
+
+    def test_empty_opencode_selection_removes_only_its_list(self):
+        self.write("Intro\n" + integration._shared_block(self.codex_names, self.opencode_names, "\n") + "\n")
+        plan = integration.plan_instruction_updates("repo", self.repo, [], "opencode")[0]
+        self.assertEqual(plan.action, "Remove")
+        integration.write_instruction_updates([plan], "opencode")
+        self.assertEqual(self.read(), "Intro\n" + integration._block(self.codex_names, "repo", "\n", "codex") + "\n")
+
+        codex_only = "Intro\n" + integration._block(self.codex_names, "repo", "\n", "codex") + "\n"
+        self.write(codex_only)
+        plan = integration.plan_instruction_updates("repo", self.repo, [], "opencode")[0]
+        self.assertEqual(plan.action, "Already current")
+        self.assertEqual(plan.proposed, codex_only.encode("utf-8"))
+
+    def test_legacy_codex_blocks_upgrade_to_shared_block(self):
+        renderers = (integration._legacy_block, integration._previous_block, integration._current_block,
+                     integration._prior_block, integration._delegation_block, integration._previous_agentic_block,
+                     integration._previous_block_with_mode_gate)
+        for renderer in renderers:
+            with self.subTest(renderer=renderer.__name__):
+                self.write("Intro\n" + renderer(self.codex_names, "repo", "\n", "codex") + "\n")
+                plan = integration.plan_instruction_updates("repo", self.repo, self.opencode_names, "opencode")[0]
+                self.assertEqual(plan.action, "Update")
+                integration.write_instruction_updates([plan], "opencode")
+                self.assertEqual(self.read(), "Intro\n" + integration._shared_block(self.codex_names, self.opencode_names, "\n") + "\n")
+                self.activate("repo", [], "opencode")
+                self.assertEqual(self.read(), "Intro\n" + integration._block(self.codex_names, "repo", "\n", "codex") + "\n")
+
+    def test_edited_shared_blocks_are_refused_and_left_unchanged(self):
+        communication, context = common.SKILL_NAMES[0], common.SKILL_NAMES[1]
+        shared = integration._shared_block([communication], [context], "\n")
+        edits = {
+            "label": shared.replace("\nCodex:\n", "\nCodex list:\n"),
+            "order": shared.replace(f"Codex:\n- `.agents/skills/{communication}/SKILL.md`\n\nOpenCode:\n- `.opencode/skills/{context}/SKILL.md`",
+                                    f"OpenCode:\n- `.opencode/skills/{context}/SKILL.md`\n\nCodex:\n- `.agents/skills/{communication}/SKILL.md`"),
+            "scope": shared.replace("These paths are relative", f"- `.claude/skills/{communication}/SKILL.md`\nThese paths are relative"),
+        }
+        for label, edited in edits.items():
+            for client in ("codex", "opencode"):
+                with self.subTest(edit=label, client=client):
+                    self.assertNotEqual(edited, shared)
+                    text = "Intro\n" + edited + "\n"
+                    self.write(text)
+                    with self.assertRaises(ValueError):
+                        integration.plan_instruction_updates("repo", self.repo, [communication], client)
+                    self.assertEqual(self.read(), text)
+
+    def test_override_file_is_separate_from_opencode_agents_file(self):
+        override = self.repo / "AGENTS.override.md"
+        override_text = "Override\n" + integration._block(self.codex_names, "repo", "\n", "codex") + "\n"
+        override.write_bytes(override_text.encode("utf-8"))
+        opencode_text = "Intro\n" + integration._block(self.opencode_names, "repo", "\n", "opencode") + "\n"
+        self.write(opencode_text)
+        plan = integration.plan_instruction_updates("repo", self.repo, self.codex_names, "codex")[0]
+        self.assertEqual(plan.path, override)
+        plan = integration.plan_instruction_updates("repo", self.repo, self.opencode_names, "opencode")[0]
+        self.assertEqual(plan.path, self.agents)
+        removals = integration.plan_instruction_removals("repo", self.repo, "codex")
+        self.assertEqual([item.path for item in removals], [override])
+        removals = integration.plan_instruction_removals("repo", self.repo, "opencode")
+        self.assertEqual([item.path for item in removals], [self.agents])
+        selected = integration.plan_selected_removals("repo", self.repo, self.codex_names, "codex")
+        self.assertEqual([item.path for item in selected], [override])
+        selected = integration.plan_selected_removals("repo", self.repo, self.opencode_names, "opencode")
+        self.assertEqual([item.path for item in selected], [self.agents])
+
+    def test_crlf_and_bom_are_preserved_when_adding_opencode(self):
+        codex_block = integration._block(self.codex_names, "repo", "\r\n", "codex")
+        self.agents.write_bytes(b"\xef\xbb\xbf" + ("Intro\r\n" + codex_block + "\r\n").encode("utf-8"))
+        plan = integration.plan_instruction_updates("repo", self.repo, self.opencode_names, "opencode")[0]
+        expected = b"\xef\xbb\xbf" + ("Intro\r\n" + integration._shared_block(self.codex_names, self.opencode_names, "\r\n") + "\r\n").encode("utf-8")
+        self.assertEqual(plan.proposed, expected)
+
+    def test_opencode_agent_profiles_render_parse_and_refuse_unsafe_edits(self):
+        import agent_operations as agents
+
+        templates = agents.load_templates()
+        expected = agents.claude_expected("reviewer", templates["reviewer"])
+        self.assertEqual(agents.agent_filename("reviewer", "opencode"), "getonmylevel-reviewer.md")
+        model = "anthropic/claude-sonnet-4-5#high"
+        text = agents.render_opencode_agent(expected, model)
+        self.assertIn('\nmode: "subagent"\n', text)
+        self.assertIn(f'model: "{model}"', text)
+        self.assertNotIn("\nname:", text)
+        self.assertIn("\n---\n" + agents.OPENCODE_MARKER + "\n", text)
+        path = self.repo / "reviewer.md"
+        path.write_text(text, encoding="utf-8")
+        self.assertEqual(agents.parse_opencode_managed_file(path, expected), (model, ""))
+        path.write_text(agents.render_opencode_agent(expected, ""), encoding="utf-8")
+        self.assertEqual(agents.parse_opencode_managed_file(path, expected), ("", ""))
+        with self.assertRaises(ValueError):
+            agents.render_opencode_agent(expected, model, "high")
+        with self.assertRaises(ValueError):
+            agents.render_opencode_agent(expected, "no-slash")
+        path.write_text(text, encoding="utf-8")
+        edits = {
+            "body": text + "extra\n",
+            "temperature": text.replace("\n---\n", "\ntemperature: 0.1\n---\n", 1),
+            "primary": text.replace('mode: "subagent"', 'mode: "primary"'),
+        }
+        for label, edited in edits.items():
+            with self.subTest(edit=label):
+                path.write_text(edited, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    agents.parse_opencode_managed_file(path, expected)
+
+    def test_opencode_agent_preview_runs_planner_validation(self):
+        import agent_operations as agents
+
+        class Value:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        gui = agents_gui.AgentConfigurator.__new__(agents_gui.AgentConfigurator)
+        gui.client = Value("opencode")
+        gui.scope = Value("repo")
+        gui.repo_path = Value(str(self.repo))
+        gui.selected_roles = lambda: ["reviewer"]
+        gui.templates = agents.load_templates()
+        gui.model_vars = {"reviewer": Value("provider/model-x#high")}
+        gui.effort_vars = {"reviewer": Value("")}
+        gui.dirty_fields = {"opencode": {("reviewer", "model")}}
+        _roles, _roots, _templates, entries = gui.plan()
+        self.assertEqual(entries[0][1], self.repo / ".opencode" / "agents" / "getonmylevel-reviewer.md")
+        self.assertIn('model: "provider/model-x#high"', entries[0][2])
+        gui.model_vars["reviewer"] = Value("invalid")
+        with self.assertRaises(ValueError):
+            gui.plan()

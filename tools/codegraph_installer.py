@@ -40,7 +40,7 @@ def integration_details(path: str | None, *, detection_error: str | None = None)
 def install_args(client: str = "codex") -> tuple[str, ...]:
     if client == "copilot":
         return ("install", "--target=copilot-cli,copilot-vscode", "--location=global", "--yes")
-    if client not in ("codex", "claude"):
+    if client not in ("codex", "claude", "opencode"):
         raise ValueError(f"Unsupported CodeGraph target: {client}")
     return ("install", f"--target={client}", "--location=global", "--yes")
 
@@ -50,7 +50,7 @@ TIMEOUT_SECONDS = 900
 
 
 def _client_label(client: str) -> str:
-    return {"claude": "Claude Code", "copilot": "GitHub Copilot CLI and VS Code", "codex": "Codex"}[client]
+    return {"claude": "Claude Code", "copilot": "GitHub Copilot CLI and VS Code", "codex": "Codex", "opencode": "OpenCode"}[client]
 
 
 @dataclass(frozen=True)

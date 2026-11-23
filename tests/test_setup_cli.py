@@ -302,3 +302,102 @@ class SetupCliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class OpenCodeSetupTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.home = self.base / "home"
+        self.repo = self.base / "repo"
+        self.home.mkdir()
+        self.repo.mkdir()
+        env = patch.dict("os.environ", {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.base / "xdg"),
+                                        "OPENCODE_CONFIG_DIR": str(self.base / "opencode-config")}, clear=False)
+        env.start()
+        self.addCleanup(env.stop)
+        home_patch = patch.object(Path, "home", return_value=self.home)
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
+
+    def run_cli(self, *args):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            result = setup.main(list(args))
+        return result, output.getvalue()
+
+    def test_opencode_roles_dry_run_global_and_repo_without_effort_line(self):
+        code, output = self.run_cli("roles", "install", "--client", "opencode", "--roles", "designer", "--dry-run")
+        self.assertEqual(code, 0, output)
+        self.assertIn(str(self.home / ".config/opencode/agents/getonmylevel-designer.md"), output)
+        self.assertNotIn("effort:", output)
+        self.assertFalse((self.home / ".config").exists())
+        code, output = self.run_cli("roles", "install", "--client", "opencode", "--scope", "both", "--repo", str(self.repo),
+                                    "--roles", "designer", "--dry-run")
+        self.assertEqual(code, 0, output)
+        self.assertIn(str(self.repo / ".opencode/agents/getonmylevel-designer.md"), output)
+        self.assertNotIn("effort:", output)
+
+    def test_opencode_roles_reject_effort_and_preserve_model_on_update(self):
+        code, output = self.run_cli("roles", "install", "--client", "opencode", "--roles", "designer",
+                                    "--effort", "designer=high", "--yes")
+        self.assertEqual(code, 1, output)
+        self.assertIn("does not support a separate reasoning effort", output)
+        self.assertIn("#variant", output)
+        path = self.home / ".config/opencode/agents/getonmylevel-designer.md"
+        self.assertFalse(path.exists())
+
+        code, output = self.run_cli("roles", "install", "--client", "opencode", "--roles", "designer",
+                                    "--model", "designer=anthropic/claude-x#high", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertIn('model: "anthropic/claude-x#high"', path.read_text(encoding="utf-8"))
+        code, output = self.run_cli("roles", "update", "--client", "opencode", "--roles", "designer", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertIn('model: "anthropic/claude-x#high"', path.read_text(encoding="utf-8"))
+        code, output = self.run_cli("roles", "update", "--client", "opencode", "--roles", "designer",
+                                    "--model", "designer=", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertNotIn("model:", path.read_text(encoding="utf-8"))
+
+    def test_opencode_roles_refuse_hand_edited_and_linked_files(self):
+        import os
+
+        code, output = self.run_cli("roles", "install", "--client", "opencode", "--roles", "designer", "--yes")
+        self.assertEqual(code, 0, output)
+        path = self.home / ".config/opencode/agents/getonmylevel-designer.md"
+        path.write_text(path.read_text(encoding="utf-8") + "\nhand edit\n", encoding="utf-8")
+        code, output = self.run_cli("roles", "update", "--client", "opencode", "--roles", "designer", "--yes")
+        self.assertEqual(code, 1, output)
+        self.assertIn("edited", output)
+
+        path.unlink()
+        target = self.base / "target.md"
+        target.write_text("outside", encoding="utf-8")
+        try:
+            os.symlink(target, path)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"File symlinks unavailable: {exc}")
+        code, output = self.run_cli("roles", "install", "--client", "opencode", "--roles", "designer", "--yes")
+        self.assertEqual(code, 1, output)
+        self.assertIn("linked", output)
+
+    def test_opencode_suggested_status_and_manual_only_actions(self):
+        code, output = self.run_cli("suggested", "status", "--client", "opencode")
+        self.assertEqual(code, 0, output)
+        code, output = self.run_cli("suggested", "install", "--client", "opencode", "--items", "cli_anything", "--dry-run")
+        self.assertEqual(code, 1, output)
+        self.assertIn("OpenCode", output)
+        code, output = self.run_cli("suggested", "install", "--client", "opencode", "--items", "rtk", "--dry-run")
+        self.assertEqual(code, 1, output)
+        self.assertIn("RTK remains manual-installation only.", output)
+
+    def test_opencode_codegraph_dry_run_targets_opencode(self):
+        fake_node, fake_npm_cli = self.base / "node.exe", self.base / "npm-cli.js"
+        with patch("codegraph_installer.detected_command", return_value=None), \
+             patch("codegraph_installer.platform.system", return_value="Windows"), \
+             patch("codegraph_installer._windows_node_npm", return_value=(fake_node, fake_npm_cli)), \
+             patch("codegraph_installer._run") as run:
+            code, output = self.run_cli("codegraph", "setup", "--client", "opencode", "--dry-run")
+        self.assertEqual(code, 0, output)
+        self.assertIn("--target=opencode", output)
+        run.assert_not_called()

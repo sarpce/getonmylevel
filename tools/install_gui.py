@@ -154,7 +154,7 @@ class Installer:
 
         suggested_box = ttk.LabelFrame(outer, text="Suggested skillsets and tools", padding=8)
         suggested_box.pack(fill="x", pady=(10, 0))
-        self.suggested_description = ttk.Label(suggested_box, text="Optional user-wide Codex skills and tools. These suggested installers do not configure Claude Code.",
+        self.suggested_description = ttk.Label(suggested_box, text="Optional user-wide skill copies for Codex or Claude Code. CLI-Anything Claude plugin and RTK installation remain manual.",
                                                wraplength=600, style="Muted.TLabel")
         self.suggested_description.pack(anchor="w")
         self.suggested_selected = {item.id: tk.BooleanVar(value=False) for item in suggested_installers.SUGGESTED_ITEMS}
@@ -284,12 +284,14 @@ class Installer:
         self.refresh_skill_status()
         claude = self.client.get() == "claude"
         copilot = self.client.get() == "copilot"
+        for variable in self.suggested_selected.values():
+            variable.set(False)
         self.codegraph_selected.set(self.codegraph_by_client[self.client.get()])
         self.codegraph_check.configure(state="normal")
         description = getattr(self, "codegraph_description", None)
         if description is not None:
             description.configure(text="Optional: configure CodeGraph for Copilot CLI and VS Code globally after confirmation." if copilot else "Optional: install CodeGraph if needed and configure the selected client globally after confirmation.")
-        self.suggested_button.configure(state="disabled" if claude or copilot else "normal")
+        self.suggested_button.configure(state="disabled" if copilot else "normal")
         self.suggested_refresh_button.configure(state="disabled" if getattr(self, "suggested_busy", False) else "normal")
         self.refresh_suggested_status()
         self.refresh_preview()
@@ -308,20 +310,25 @@ class Installer:
         if not selected:
             messagebox.showinfo("No suggestions selected", "Select an item first.")
             return
-        status = suggested_installers.suggested_status()
+        client = self.selected_client()
+        try:
+            status = suggested_installers.suggested_status(client)
+        except (OSError, ValueError, RuntimeError) as exc:
+            messagebox.showerror("Status unknown", f"Could not detect suggested installations: {exc}")
+            return
         installs, removals, errors = [], [], []
         for item_id in selected:
             if status[item_id]:
                 if item_id == "rtk":
                     errors.append(f"RTK is detected at {status[item_id]}. Remove it manually using its package manager.")
                     continue
-                plan, error = suggested_installers.plan_removal(item_id)
+                plan, error = suggested_installers.plan_removal(item_id, client)
                 if error:
                     errors.append(error)
                 elif plan:
                     removals.append(plan)
             else:
-                plans, error = suggested_installers.plan_selected([item_id])
+                plans, error = suggested_installers.plan_selected([item_id], client)
                 if error:
                     errors.append(error)
                 elif plans:
@@ -399,7 +406,7 @@ class Installer:
         self.remove_button.configure(state="normal")
         self.remove_skills_button.configure(state="normal")
         self.close_button.configure(state="normal")
-        self.suggested_button.configure(state="normal")
+        self.suggested_button.configure(state="disabled" if self.selected_client() == "copilot" else "normal")
         self.suggested_refresh_button.configure(state="normal")
         for check in self.suggested_checks:
             check.configure(state="normal")
@@ -424,7 +431,8 @@ class Installer:
 
     def refresh_suggested_status(self) -> None:
         try:
-            status = suggested_installers.suggested_status()
+            client = self.selected_client()
+            status = suggested_installers.suggested_status(client)
             detection_error = None
         except (OSError, RuntimeError, ValueError) as exc:
             status = {}
@@ -450,14 +458,28 @@ class Installer:
                 detail.configure(text="Not detected on PATH. Manual installation only; version is not selected here.")
                 check.configure(text=f"{item.name} (manual installation only)", state="disabled")
                 self.suggested_selected[item_id].set(False)
+            elif item_id == "cli_anything" and self.selected_client() == "claude":
+                plugin_locations = ", ".join(map(str, locations)) if locations else None
+                detail.configure(text=(f"Claude marketplace plugin registered at {plugin_locations}; manage it through Claude Code's /plugin interface."
+                                       if plugin_locations else "Unavailable: the selected pin provides a Claude marketplace plugin; install it through Claude Code's /plugin interface."))
+                check.configure(text=f"{item.name} (manual Claude plugin installation)", state="disabled")
+                self.suggested_selected[item_id].set(False)
             elif locations:
-                detail.configure(text="Detected copy at: " + ", ".join(map(str, locations)) + " · version and provenance unknown")
-                enabled = self.selected_client() == "codex" and not self.suggested_busy
+                plugins = [path for path in locations if Path(path).name == "installed_plugins.json"]
+                copies = [path for path in locations if Path(path).name != "installed_plugins.json"]
+                bits = []
+                if copies:
+                    bits.append("Skill copy: " + ", ".join(map(str, copies)) + " (version and provenance unknown)")
+                if plugins:
+                    bits.append("Claude marketplace plugin registered at " + ", ".join(map(str, plugins)) + "; remove through /plugin")
+                detail.configure(text=" · ".join(bits))
+                enabled = self.selected_client() in ("codex", "claude") and not self.suggested_busy and not plugins
                 check.configure(text=f"Remove {item.name}", state="normal" if enabled else "disabled")
             else:
                 detail.configure(text="Not detected in supported locations · new install uses pinned commit" if item_id != "rtk" else item.description)
-                enabled = self.selected_client() == "codex" and not self.suggested_busy
-                check.configure(text=f"Install {item.name}", state="normal" if enabled else "disabled")
+                enabled = self.selected_client() in ("codex", "claude") and not self.suggested_busy and (item_id != "cli_anything" or self.selected_client() == "codex")
+                suffix = " (Claude marketplace plugin; manual install)" if item_id == "cli_anything" and self.selected_client() == "claude" else ""
+                check.configure(text=f"Install {item.name}{suffix}", state="normal" if enabled else "disabled")
         self.suggested_refresh_button.configure(state="disabled" if self.suggested_busy else "normal")
 
     def refresh_codegraph_status(self) -> None:
@@ -483,12 +505,14 @@ class Installer:
     def show_suggested_details(self, item_id: str) -> None:
         item = next(item for item in suggested_installers.SUGGESTED_ITEMS if item.id == item_id)
         try:
-            status = suggested_installers.suggested_status()
+            client = self.selected_client()
+            status = suggested_installers.suggested_status(client)
             locations = status.get(item_id)
             error = None
         except (OSError, RuntimeError, ValueError) as exc:
             locations, error = (), str(exc)
-        self._show_integration_details(item.name, suggested_installers.integration_details(item_id, locations or (), detection_error=error), item.upstream_url)
+        client = self.selected_client()
+        self._show_integration_details(item.name, suggested_installers.integration_details(item_id, locations or (), detection_error=error, client=client), item.upstream_url)
 
     def show_codegraph_details(self) -> None:
         try:
@@ -797,7 +821,7 @@ class Installer:
             widget.configure(state="normal")
         client = self.client.get()
         self.codegraph_check.configure(state="normal")
-        self.suggested_button.configure(state="disabled" if client in ("claude", "copilot") else "normal")
+        self.suggested_button.configure(state="disabled" if client == "copilot" else "normal")
         self.suggested_refresh_button.configure(state="disabled" if self.suggested_busy else "normal")
         self.refresh_codegraph_status()
 

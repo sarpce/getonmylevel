@@ -50,7 +50,7 @@ _INTEGRATION_PINS = {
 }
 
 _INTEGRATION_EFFECTS = {
-    "rtk": "No automatic installation is offered. A manual package-manager installation may execute package scripts; this project does not change Codex configuration.",
+    "rtk": "No automatic installation is offered. A manual package-manager installation may execute package scripts; this project does not change client configuration.",
     "last30days": "Downloads the selected Git commit and copies skill files. The copied skill is not executed during installation; client configuration is unchanged.",
     "cli_anything": "Downloads the selected Git commit, then executes its upstream installer with your privileges. It copies skill files and does not configure Codex.",
     "impeccable": "Downloads the selected Git commit and copies skill files. It does not execute the skill or configure hooks; its engine may download a platform binary on first use.",
@@ -59,7 +59,7 @@ _INTEGRATION_EFFECTS = {
 }
 
 
-def integration_details(item_id: str, locations=(), *, detection_error: str | None = None) -> str:
+def integration_details(item_id: str, locations=(), *, detection_error: str | None = None, client: str = "codex") -> str:
     """Describe known status and installation facts without inferring copy identity."""
     item = next((item for item in SUGGESTED_ITEMS if item.id == item_id), None)
     if item is None:
@@ -69,7 +69,14 @@ def integration_details(item_id: str, locations=(), *, detection_error: str | No
     elif item_id == "rtk":
         status = f"Detected command: {', '.join(map(str, locations)) if isinstance(locations, (tuple, list)) else locations}; identity unknown, installed version unknown, provenance unknown." if locations else "Status: No rtk command detected on PATH; this does not rule out installations elsewhere."
     elif locations:
-        status = "Detected copy at: " + ", ".join(map(str, locations))
+        plugin_paths = [Path(path) for path in locations if Path(path).name == "installed_plugins.json"]
+        skill_paths = [Path(path) for path in locations if Path(path).name != "installed_plugins.json"]
+        parts = []
+        if skill_paths:
+            parts.append("Detected skill copy at: " + ", ".join(map(str, skill_paths)))
+        if plugin_paths:
+            parts.append("Detected Claude marketplace plugin registration at: " + ", ".join(map(str, plugin_paths)))
+        status = "\n".join(parts)
     else:
         status = "Status: Not detected in supported skill locations."
     pin = _INTEGRATION_PINS.get(item_id)
@@ -77,8 +84,36 @@ def integration_details(item_id: str, locations=(), *, detection_error: str | No
     existing = "Existing installed version: unknown. Provenance: unknown; ownership by getonmylevel is not established by presence alone."
     if item_id == "rtk":
         existing = "Installed version: unknown. Provenance: unknown; this project does not manage that command."
-    return "\n".join((f"Upstream project: {item.upstream_url}", status, selected, existing,
-                       "Installation effects: " + _INTEGRATION_EFFECTS[item_id]))
+    if client in ("codex", "claude") and item_id not in ("rtk", "cli_anything"):
+        destination = _skill_roots(client)[0] / ({"last30days": "last30days", **{key: val[0] for key, val in _OPTIONAL_DESIGN_SKILLS.items()}}.get(item_id, item_id))
+        status += f"\nSelected client: {'Claude Code' if client == 'claude' else 'Codex'}; destination: {destination}"
+    elif item_id == "cli_anything" and client == "codex":
+        status += f"\nSelected client: Codex; destination: {_cli_destination()}"
+    elif item_id == "cli_anything" and client == "claude":
+        status += "\nClaude Code action unavailable: the selected pin ships a marketplace plugin; manage it with Claude Code's /plugin interface."
+    requirements = ("Prerequisites: Git and network access; CLI-Anything also runs the selected upstream shell installer." if item_id == "cli_anything" and client == "codex" else
+                    "Prerequisites: Git and network access for pinned skill copies." if item_id not in ("rtk",) and not (item_id == "cli_anything" and client == "claude") else
+                    "Prerequisites: manual installation from upstream.")
+    network = ("Network activity: fetches the selected Git commit and executes its upstream installer after confirmation." if item_id == "cli_anything" and client == "codex" else
+               "Network activity: fetches only the selected Git commit after confirmation." if item_id not in ("rtk", "cli_anything") else
+               "Network activity: none by this GUI; manual upstream installation may access the network.")
+    adaptation = {
+        "ui_ux_pro_max": ("Client adaptation: replaces Claude plugin-root paths with a skill-directory-relative path." if client == "claude" else "Client adaptation: the Codex skill path is adapted from the pinned Claude skill examples."),
+        "impeccable": ("Client adaptation: copies the pinned Claude skill payload; optional hooks are not configured." if client == "claude" else "Client adaptation: copies the pinned Codex skill payload; optional hooks are not configured."),
+        "cli_anything": ("Client adaptation: unavailable; the selected Claude distribution is a marketplace plugin." if client == "claude" else "Client adaptation: runs the pinned Codex skill installer."),
+        "rtk": "Client adaptation: standalone tool, manual only.",
+    }.get(item_id, "Client adaptation: copies the selected skill payload without changing client configuration.")
+    if item_id == "cli_anything" and client == "claude":
+        requirements = "Prerequisites: Claude Code marketplace support; manual installation only."
+    elif item_id == "rtk":
+        requirements = "Prerequisites: manual installation from upstream."
+    if item_id == "cli_anything" and client == "claude":
+        network = "Network activity: none by this GUI; manual marketplace setup accesses upstream."
+    effects = _INTEGRATION_EFFECTS[item_id]
+    if item_id == "cli_anything" and client == "claude":
+        effects = "No automatic action is offered. Manual marketplace installation adds and enables the upstream Claude plugin; manage and remove it through Claude Code's /plugin interface."
+    return "\n".join((f"Upstream project: {item.upstream_url}", status, selected, existing, requirements, network,
+                       adaptation, "Installation effects: " + effects))
 
 
 @dataclass(frozen=True)
@@ -101,6 +136,7 @@ class SuggestedInstallPlan:
     data: tuple[str, ...] = ()
     manager: str = ""
     license: str = ""
+    client: str = "codex"
 
     @property
     def confirmation_text(self) -> str:
@@ -114,6 +150,7 @@ class SuggestedRemovalPlan:
     id: str
     name: str
     destinations: tuple[tuple[Path, tuple[int, int]], ...]
+    client: str = "codex"
 
     @property
     def confirmation_text(self) -> str:
@@ -187,7 +224,10 @@ def _safe_destination(path: Path) -> None:
         raise FileExistsError(f"Destination already exists; updates are not performed: {path}")
 
 
-def _skill_roots() -> tuple[Path, ...]:
+def _skill_roots(client: str = "codex") -> tuple[Path, ...]:
+    if client == "claude":
+        configured = os.environ.get("CLAUDE_CONFIG_DIR")
+        return ((Path(configured).expanduser() if configured else Path.home() / ".claude") / "skills",)
     codex_home = os.environ.get("CODEX_HOME")
     roots = (Path.home() / ".agents" / "skills",
              (Path(codex_home).expanduser() if codex_home else Path.home() / ".codex") / "skills")
@@ -202,34 +242,60 @@ def _skill_roots() -> tuple[Path, ...]:
     return tuple(result)
 
 
-def _skill_destinations(item_id: str) -> tuple[Path, ...]:
+def _skill_destinations(item_id: str, client: str = "codex") -> tuple[Path, ...]:
     name = {"last30days": "last30days", "cli_anything": "cli-anything",
             **{key: value[0] for key, value in _OPTIONAL_DESIGN_SKILLS.items()}}.get(item_id)
     if name is None:
         return ()
-    return tuple(root / name for root in _skill_roots() if _is_present(root / name))
+    # CLI-Anything is deliberately not installed as a Claude skill; its pinned
+    # Claude distribution is a marketplace plugin with a distinct lifecycle.
+    if client == "claude" and item_id == "cli_anything":
+        return ()
+    return tuple(root / name for root in _skill_roots(client) if _is_present(root / name))
 
 
-def _ensure_no_alternate_install(item_id: str, destination: Path) -> None:
+def _ensure_no_alternate_install(item_id: str, destination: Path, client: str = "codex") -> None:
     target = os.path.normcase(os.path.abspath(destination))
-    others = [path for path in _skill_destinations(item_id)
+    others = [path for path in _skill_destinations(item_id, client)
               if os.path.normcase(os.path.abspath(path)) != target]
     if others:
         raise FileExistsError("The skill appeared in another supported location: " + ", ".join(map(str, others)))
 
 
-def suggested_status() -> dict[str, tuple[Path, ...] | str | None]:
+def _claude_plugin_status() -> dict[str, str]:
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser()
+    manifest = config / "plugins" / "installed_plugins.json"
+    if not manifest.exists():
+        return {}
+    import json
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    raw = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(raw, dict):
+        raise ValueError(f"Unrecognized Claude plugin registry format: {manifest}")
+    known = {"last30days": "last30days@last30days-skill", "impeccable": "impeccable@impeccable",
+             "ui_ux_pro_max": "ui-ux-pro-max@ui-ux-pro-max-skill", "cli_anything": "cli-anything@cli-anything"}
+    return {key: str(manifest) for key, plugin in known.items() if plugin in raw}
+
+
+def suggested_status(client: str = "codex") -> dict[str, tuple[Path, ...] | str | None]:
     """Return detected locations for suggested installs; RTK is only detected on PATH."""
-    return {"last30days": _skill_destinations("last30days"),
-            "cli_anything": _skill_destinations("cli_anything"),
-            **{item_id: _skill_destinations(item_id) for item_id in _OPTIONAL_DESIGN_SKILLS},
+    plugins = _claude_plugin_status() if client == "claude" else {}
+    return {"last30days": (*_skill_destinations("last30days", client), *((Path(plugins["last30days"]),) if "last30days" in plugins else ())),
+            "cli_anything": (*_skill_destinations("cli_anything", client), *((Path(plugins["cli_anything"]),) if "cli_anything" in plugins else ())),
+            **{item_id: (*_skill_destinations(item_id, client), *((Path(plugins[item_id]),) if item_id in plugins else ())) for item_id in _OPTIONAL_DESIGN_SKILLS},
             "rtk": shutil.which("rtk")}
 
 
-def plan_removal(item_id: str) -> tuple[SuggestedRemovalPlan | None, str | None]:
+def plan_removal(item_id: str, client: str = "codex") -> tuple[SuggestedRemovalPlan | None, str | None]:
     if item_id not in ("last30days", "cli_anything", *_OPTIONAL_DESIGN_SKILLS):
         return None, "Only detected skill directories can be removed here."
-    paths = _skill_destinations(item_id)
+    if client == "claude" and item_id in _claude_plugin_status():
+        return None, "A Claude marketplace plugin is registered. Remove it using Claude Code's /plugin interface; this tool never removes plugin caches."
+    own_root = _skill_roots(client)[0].resolve(strict=False)
+    other_client = "codex" if client == "claude" else "claude"
+    if any(own_root == path.resolve(strict=False) for path in _skill_roots(other_client)):
+        return None, "Claude and Codex skill roots resolve to the same physical path. Refusing ambiguous removal."
+    paths = _skill_destinations(item_id, client)
     if not paths:
         return None, "The skill is no longer installed in the supported locations. Refresh and try again."
     name = next(item.name for item in SUGGESTED_ITEMS if item.id == item_id)
@@ -240,7 +306,7 @@ def plan_removal(item_id: str) -> tuple[SuggestedRemovalPlan | None, str | None]
             destinations.append((path, _identity(path)))
     except (OSError, ValueError) as exc:
         return None, f"Cannot safely prepare removal: {exc}"
-    return SuggestedRemovalPlan(item_id, name, tuple(destinations)), None
+    return SuggestedRemovalPlan(item_id, name, tuple(destinations), client=client), None
 
 
 def _identity(path: Path) -> tuple[int, int]:
@@ -274,6 +340,12 @@ def remove_selected(plans: list[SuggestedRemovalPlan]) -> list[tuple[str, bool, 
     for plan in plans:
         removed = []
         try:
+            claude_root = _skill_roots("claude")[0].resolve(strict=False)
+            if any(claude_root == root.resolve(strict=False) for root in _skill_roots("codex")):
+                raise ValueError("Claude and Codex skill roots resolve to the same physical path. Refusing ambiguous removal.")
+            if plan.client == "claude":
+                if plan.id in _claude_plugin_status():
+                    raise FileExistsError("A Claude marketplace plugin is registered; remove it through Claude Code's /plugin interface.")
             for path, identity in plan.destinations:
                 _safe_removal_destination(path)
                 if _identity(path) != identity:
@@ -325,12 +397,14 @@ def _clone(git: str, url: str, commit: str, destination: Path) -> tuple[bool, st
     return True, f"Verified pinned commit {commit}."
 
 
-def _last30_plan() -> tuple[SuggestedInstallPlan | None, str | None]:
+def _last30_plan(client: str = "codex") -> tuple[SuggestedInstallPlan | None, str | None]:
     git = _git_path()
     if not git:
         return None, f"Git is required. Install manually: {LAST30_URL}"
-    destination = Path.home() / ".agents" / "skills" / "last30days"
-    existing = _skill_destinations("last30days")
+    if client == "claude" and "last30days" in _claude_plugin_status():
+        return None, "A Claude marketplace plugin is already registered. Use Claude Code's /plugin interface to manage it."
+    destination = _skill_roots(client)[0] / "last30days"
+    existing = _skill_destinations("last30days", client)
     if existing:
         return None, "Already installed at " + ", ".join(map(str, existing))
     try:
@@ -347,7 +421,7 @@ def _last30_plan() -> tuple[SuggestedInstallPlan | None, str | None]:
                f"Requires Git; the installer verifies checkout HEAD before copying. Candidate pin, not claimed integration-tested. "
                f"The copied skill is not executed. Upstream: {LAST30_URL}.")
     return SuggestedInstallPlan("last30days", "Last 30 Days research skill", destination, details, commands,
-                                data=(os.path.abspath(git),)), None
+                                data=(os.path.abspath(git),), client=client), None
 
 
 def _install_last30(plan: SuggestedInstallPlan) -> tuple[bool, str]:
@@ -355,7 +429,9 @@ def _install_last30(plan: SuggestedInstallPlan) -> tuple[bool, str]:
     destination = plan.destination
     assert destination is not None
     try:
-        _ensure_no_alternate_install("last30days", destination)
+        if plan.client == "claude" and "last30days" in _claude_plugin_status():
+            raise FileExistsError("A Claude marketplace plugin appeared after planning; use Claude Code's /plugin interface.")
+        _ensure_no_alternate_install("last30days", destination, plan.client)
         _safe_destination(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="getonmylevel-last30-") as temp:
@@ -372,14 +448,16 @@ def _install_last30(plan: SuggestedInstallPlan) -> tuple[bool, str]:
             try:
                 shutil.copytree(source, stage, symlinks=False)
                 _reject_linked_tree(stage)
-                _ensure_no_alternate_install("last30days", destination)
+                if plan.client == "claude" and "last30days" in _claude_plugin_status():
+                    raise FileExistsError("A Claude marketplace plugin appeared after planning; use Claude Code's /plugin interface.")
+                _ensure_no_alternate_install("last30days", destination, plan.client)
                 _safe_destination(destination)
                 stage.rename(destination)
             finally:
                 shutil.rmtree(stage_parent, ignore_errors=True)
     except (OSError, ValueError) as exc:
         return False, f"Installation failed: {exc}. Check for partial changes at {destination}."
-    return True, f"Installed {destination}. Restart Codex to discover the skill."
+    return True, f"Installed {destination}. Restart {('Claude Code' if plan.client == 'claude' else 'Codex')} to discover the skill."
 
 
 def _cli_destination() -> Path:
@@ -451,13 +529,20 @@ def _validate_git_tree(git: str, checkout: Path, commit: str, source_paths: tupl
     return True, "Verified selected skill files are regular tracked files."
 
 
-def _design_skill_plan(item_id: str) -> tuple[SuggestedInstallPlan | None, str | None]:
+def _design_skill_plan(item_id: str, client: str = "codex") -> tuple[SuggestedInstallPlan | None, str | None]:
     name, url, commit, source_path, required_paths, license_paths, description = _OPTIONAL_DESIGN_SKILLS[item_id]
     git = _git_path()
     if not git:
         return None, f"Git is required. Install manually from {url}."
-    destination = Path.home() / ".agents" / "skills" / name
-    existing = _skill_destinations(item_id)
+    if client == "claude" and item_id == "impeccable":
+        source_path = ".claude/skills/impeccable"
+        # This selected Claude payload has SKILL.md, reference/, and scripts/;
+        # the Codex payload's agents/ directory is absent at this revision.
+        required_paths = ("SKILL.md", "reference", "scripts")
+    if client == "claude" and item_id in _claude_plugin_status():
+        return None, "A Claude marketplace plugin is already registered. Use Claude Code's /plugin interface to manage it."
+    destination = _skill_roots(client)[0] / name
+    existing = _skill_destinations(item_id, client)
     if existing:
         return None, "Already installed at " + ", ".join(map(str, existing))
     try:
@@ -473,11 +558,18 @@ def _design_skill_plan(item_id: str) -> tuple[SuggestedInstallPlan | None, str |
                 (os.path.abspath(git), "-C", "<temporary checkout>", "rev-parse", "HEAD"),
                 (os.path.abspath(git), "-C", "<temporary checkout>", "ls-tree", "-rz", "-r", "-t", commit, "--", *source_files),
                 ("copy", f"<checkout>/{source_path}", str(destination)))
+    adaptation = ""
+    if item_id == "ui_ux_pro_max":
+        adaptation = (" Client adaptation: replaces `${CLAUDE_PLUGIN_ROOT}/.claude/skills/ui-ux-pro-max` with `{SKILL_DIR}` and instructs the user to resolve that to the skill directory."
+                      if client == "claude" else
+                      " Client adaptation: rewrites the upstream Claude plugin-root examples to `{SKILL_DIR}` and instructs the user to resolve that to the installed skill directory.")
+    elif item_id == "impeccable":
+        adaptation = f" Client adaptation: copies the selected `{source_path}` skill payload; optional hooks are not configured."
     details = (f"Installs the complete {description} from selected commit {commit} to {destination}. Requires Git and network access. "
                f"The installer verifies checkout HEAD and checks the selected skill files for symlinks before copying. "
-               f"It does not execute the downloaded skill or configure hooks. {_DESIGN_SKILL_EFFECTS[item_id]} Upstream: {url}.")
+               f"It does not execute the downloaded skill or configure hooks. {_DESIGN_SKILL_EFFECTS[item_id]}{adaptation} Upstream: {url}.")
     return SuggestedInstallPlan(item_id, description, destination, details, commands,
-                                data=(os.path.abspath(git), commit, source_path, *required_paths, *license_paths)), None
+                                data=(os.path.abspath(git), commit, source_path, *required_paths, *license_paths), client=client), None
 
 
 def _design_skill_installer(plan: SuggestedInstallPlan) -> tuple[bool, str]:
@@ -488,7 +580,9 @@ def _design_skill_installer(plan: SuggestedInstallPlan) -> tuple[bool, str]:
     destination = plan.destination
     assert destination is not None
     try:
-        _ensure_no_alternate_install(plan.id, destination)
+        if plan.client == "claude" and plan.id in _claude_plugin_status():
+            raise FileExistsError("A Claude marketplace plugin appeared after planning; use Claude Code's /plugin interface.")
+        _ensure_no_alternate_install(plan.id, destination, plan.client)
         _safe_destination(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=f"getonmylevel-{plan.id}-") as temp:
@@ -524,14 +618,16 @@ def _design_skill_installer(plan: SuggestedInstallPlan) -> tuple[bool, str]:
                     skill_text = skill_text.replace(marker, marker + "\n\nFirst resolve `SKILL_DIR` to the absolute directory containing this loaded `SKILL.md`. Use that directory in the examples below.\n")
                     skill_file.write_text(skill_text, encoding="utf-8")
                 _reject_linked_tree(stage)
-                _ensure_no_alternate_install(plan.id, destination)
+                if plan.client == "claude" and plan.id in _claude_plugin_status():
+                    raise FileExistsError("A Claude marketplace plugin appeared after planning; use Claude Code's /plugin interface.")
+                _ensure_no_alternate_install(plan.id, destination, plan.client)
                 _safe_destination(destination)
                 stage.rename(destination)
             finally:
                 shutil.rmtree(stage_parent, ignore_errors=True)
     except (OSError, ValueError) as exc:
         return False, f"Installation failed: {exc}. Check for partial changes at {destination}."
-    return True, f"Installed {destination}. Restart Codex to discover the skill."
+    return True, f"Installed {destination}. Restart {('Claude Code' if plan.client == 'claude' else 'Codex')} to discover the skill."
 
 
 def _impeccable_plan():
@@ -594,7 +690,7 @@ SUGGESTED_ITEMS = (
 )
 
 
-def plan_selected(selected_ids: list[str]) -> tuple[list[SuggestedInstallPlan] | None, str | None]:
+def plan_selected(selected_ids: list[str], client: str = "codex") -> tuple[list[SuggestedInstallPlan] | None, str | None]:
     """Plan all selections before any confirmation or side effects."""
     if not selected_ids:
         return None, "Select at least one suggested skill or tool."
@@ -605,7 +701,18 @@ def plan_selected(selected_ids: list[str]) -> tuple[list[SuggestedInstallPlan] |
     errors = []
     for item_id in selected_ids:
         item = by_id[item_id]
-        plan, error = item.planner()
+        if client == "claude" and item_id == "cli_anything":
+            errors.append("CLI-Anything: Claude support at the selected pin is a marketplace plugin, not the Codex skill installer. Install manually with Claude Code: /plugin marketplace add HKUDS/CLI-Anything then follow its cli-anything-plugin instructions.")
+            continue
+        if client == "claude" and item_id == "rtk":
+            errors.append("RTK remains manual-installation only.")
+            continue
+        if item_id == "last30days":
+            plan, error = _last30_plan(client)
+        elif item_id in _OPTIONAL_DESIGN_SKILLS:
+            plan, error = _design_skill_plan(item_id, client)
+        else:
+            plan, error = item.planner()
         if error:
             errors.append(f"{item.name}: {error}")
         elif plan is not None:

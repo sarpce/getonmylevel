@@ -42,6 +42,8 @@ python tools/install.py install --client codex --scope user
 
 Use `--client claude` for Claude Code or `--client copilot` for GitHub Copilot CLI and VS Code, `--dry-run` to preview, and `update` or `remove` for subsequent changes. See [scriptable installation](INSTALL.md#scriptable-installation) for scope and skill selection. Python 3.11+ is required.
 
+The separate [`tools/setup.py`](INSTALL.md#headless-setup-operations) command manages optional agent roles, global CodeGraph setup, and supported suggested integrations without Tkinter or a display. It provides dry runs and explicit `--yes` confirmation gates for global configuration, third-party installation, and suggested integration removal.
+
 ## Use skills and agents
 
 The Active by default checklist controls which installed skills the selected client is asked to read when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering` or `$getonmylevel-design`. Your instructions and higher-priority rules still apply.
@@ -52,17 +54,17 @@ The Agents tab can also copy an optional On/Off/Ask session preference block. It
 
 ## Client support and paths
 
-The GUI writes client-specific skills, instructions, and optional agent files. The [client capabilities and paths table](INSTALL.md#client-capabilities-and-paths) lists destinations, environment overrides, and scope behavior. Suggested tools are offered in the Codex view; CodeGraph supports Codex, Claude Code, and both GitHub Copilot CLI and VS Code targets together.
+The GUI and headless commands write client-specific skills, instructions, optional agent files, and supported integrations. The [client capabilities and paths table](INSTALL.md#client-capabilities-and-paths) lists destinations, environment overrides, and scope behavior. CodeGraph supports Codex, Claude Code, and both GitHub Copilot CLI and VS Code targets together.
 
 ## Extra tools
 
 **CodeGraph** is an independently selectable recommendation for Codex, Claude Code, and GitHub Copilot CLI/VS Code. Selecting the context skill does not install it or require Node.js or npm. When explicitly selected, CodeGraph is installed if missing (requiring Node.js and npm) and configured globally for the chosen client regardless of skill scope. Setup may download packages and change that client's MCP configuration and managed instructions. It does not initialize or index any project; that is a separate choice. When managed instructions are active, the client is instructed to use an existing index for repository context and offer indexing when a project has none. Client behavior remains subject to instruction precedence and tool availability.
 
-The GUI offers optional [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), [CLI-Anything](https://github.com/HKUDS/CLI-Anything), [Impeccable](https://github.com/pbakaus/impeccable), [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill), and [Anti UI Slop](https://github.com/uizze/uizze). Last 30 Days, Impeccable, UI UX Pro Max, and Anti UI Slop can be copied for Codex or Claude Code. CLI-Anything remains Codex-only in the GUI: its selected Claude revision supplies a marketplace plugin, so install it through Claude Code's `/plugin` interface. RTK remains manual. Impeccable, UI UX Pro Max, and Anti UI Slop are copied without running installer code or setting up optional hooks. Existing copies are not silently updated. RTK automatic installation is disabled because package-manager commands select moving versions. Maintainers update pins in the installer modules; see [INSTALL.md](INSTALL.md) for paths, pinning, and effects.
+The GUI and headless CLI offer optional [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), [CLI-Anything](https://github.com/HKUDS/CLI-Anything), [Impeccable](https://github.com/pbakaus/impeccable), [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill), and [Anti UI Slop](https://github.com/uizze/uizze). Last 30 Days, Impeccable, UI UX Pro Max, and Anti UI Slop can be copied for Codex or Claude Code. CLI-Anything's Codex skill can be installed automatically; for Claude Code its selected revision supplies a marketplace plugin managed through Claude Code's `/plugin` interface. RTK remains manual. Impeccable, UI UX Pro Max, and Anti UI Slop are copied without running installer code or setting up optional hooks. Existing copies are not silently updated. RTK automatic installation is disabled because package-manager commands select moving versions. Maintainers update pins in the installer modules; see [INSTALL.md](INSTALL.md) for paths, pinning, and effects.
 
 ## More details
 
-[INSTALL.md](INSTALL.md) has detailed destinations, update and removal behavior, optional tool prerequisites, and scriptable installation, updates, and removal for Codex, Claude Code, and GitHub Copilot without Tkinter or a display. The command also manages default-use instructions; CodeGraph remains a separate GUI operation.
+[INSTALL.md](INSTALL.md) has detailed destinations, update and removal behavior, optional tool prerequisites, and scriptable setup operations for Codex, Claude Code, and GitHub Copilot without Tkinter or a display. The existing skill installer continues to manage bundled skills and default-use instructions.
 
 ## License
 

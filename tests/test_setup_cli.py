@@ -9,6 +9,7 @@ from unittest.mock import patch
 import common
 import setup
 import agent_operations as agents
+import agents_gui
 
 
 class SetupCliTests(unittest.TestCase):
@@ -84,6 +85,127 @@ class SetupCliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("linked", output)
         self.assertEqual(target.read_text(encoding="utf-8"), "keep")
+
+    def test_claude_model_and_effort_are_independent_and_inherit_is_explicit(self):
+        code, output = self.run_cli("roles", "install", "--client", "claude", "--roles", "designer", "--model",
+                                    "designer=claude-sonnet-future-2026-01", "--effort", "designer=xhigh", "--yes")
+        self.assertEqual(code, 0, output)
+        path = self.home / ".claude/agents/getonmylevel-designer.md"
+        content = path.read_text(encoding="utf-8")
+        self.assertIn('model: "claude-sonnet-future-2026-01"', content)
+        self.assertIn('effort: "xhigh"', content)
+
+        code, output = self.run_cli("roles", "update", "--client", "claude", "--roles", "designer", "--model",
+                                    "designer=inherit", "--yes")
+        self.assertEqual(code, 0, output)
+        content = path.read_text(encoding="utf-8")
+        self.assertIn('model: "inherit"', content)
+        self.assertIn('effort: "xhigh"', content)
+        code, output = self.run_cli("roles", "update", "--client", "claude", "--roles", "designer", "--model",
+                                    "designer=", "--effort", "designer=", "--yes")
+        self.assertEqual(code, 0, output)
+        content = path.read_text(encoding="utf-8")
+        self.assertNotIn("model:", content)
+        self.assertNotIn("effort:", content)
+
+    def test_claude_invalid_effort_does_not_write_and_remove_remains_available(self):
+        code, output = self.run_cli("roles", "install", "--client", "claude", "--roles", "reviewer", "--effort",
+                                    "reviewer=ultracode", "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("Unsupported Claude Code effort", output)
+        path = self.home / ".claude/agents/getonmylevel-reviewer.md"
+        self.assertFalse(path.exists())
+
+        code, output = self.run_cli("roles", "install", "--client", "claude", "--roles", "reviewer", "--effort",
+                                    "reviewer=high", "--yes")
+        self.assertEqual(code, 0, output)
+        code, output = self.run_cli("roles", "update", "--client", "claude", "--roles", "reviewer", "--effort",
+                                    "reviewer=ultracode", "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn('effort: "high"', path.read_text(encoding="utf-8"))
+        code, output = self.run_cli("roles", "remove", "--client", "claude", "--roles", "reviewer", "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertFalse(path.exists())
+
+    def test_claude_dry_run_uses_same_effort_validation(self):
+        code, output = self.run_cli("roles", "install", "--client", "claude", "--roles", "implementer", "--effort",
+                                    "implementer=invalid", "--dry-run")
+        self.assertEqual(code, 1)
+        self.assertIn("Unsupported Claude Code effort", output)
+        self.assertFalse((self.home / ".claude/agents/getonmylevel-implementer.md").exists())
+
+    def test_claude_update_refuses_unmanaged_and_user_modified_files(self):
+        code, output = self.run_cli("roles", "install", "--client", "claude", "--roles", "tester", "--yes")
+        self.assertEqual(code, 0, output)
+        path = self.home / ".claude/agents/getonmylevel-tester.md"
+        original = path.read_text(encoding="utf-8")
+        path.write_text(original.replace("<!-- getonmylevel-managed-v1 -->", "<!-- user content -->"), encoding="utf-8")
+        code, output = self.run_cli("roles", "update", "--client", "claude", "--roles", "tester", "--model",
+                                    "tester=inherit", "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("edited outside model/effort settings", output)
+        self.assertIn("<!-- user content -->", path.read_text(encoding="utf-8"))
+
+        path.write_text("user-authored agent\n", encoding="utf-8")
+        code, output = self.run_cli("roles", "update", "--client", "claude", "--roles", "tester", "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("not a Claude Code agent managed", output)
+        self.assertEqual(path.read_text(encoding="utf-8"), "user-authored agent\n")
+
+    def test_claude_plan_refuses_destination_changes_before_write_or_remove(self):
+        new_plan = agents.role_plan("claude", "global", None, ["designer"], {"designer": "sonnet"})
+        path = self.home / ".claude/agents/getonmylevel-designer.md"
+        path.parent.mkdir(parents=True)
+        path.write_text("created after preview\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "changed since planning"):
+            agents.perform_role_plan(new_plan, "claude", "install")
+        self.assertEqual(path.read_text(encoding="utf-8"), "created after preview\n")
+
+        path.unlink()
+        initial = agents.role_plan("claude", "global", None, ["designer"], {"designer": "sonnet"})
+        agents.perform_role_plan(initial, "claude", "install")
+        update = agents.role_plan("claude", "global", None, ["designer"], {"designer": "opus"})
+        original = path.read_text(encoding="utf-8")
+        path.write_text(original.replace('model: "sonnet"', 'model: "haiku"'), encoding="utf-8")
+        changed = path.read_text(encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "changed since planning"):
+            agents.perform_role_plan(update, "claude", "update")
+        self.assertEqual(path.read_text(encoding="utf-8"), changed)
+
+        removal = agents.role_plan("claude", "global", None, ["designer"], action="remove")
+        path.write_text(changed.replace('model: "haiku"', 'model: "opus"'), encoding="utf-8")
+        changed_again = path.read_text(encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "changed since planning"):
+            agents.perform_role_plan(removal, "claude", "remove")
+        self.assertEqual(path.read_text(encoding="utf-8"), changed_again)
+
+    def test_claude_gui_preserves_conflicting_scope_values_until_explicit_selection(self):
+        initial = agents.role_plan("claude", "both", self.repo, ["reviewer"], {"reviewer": "sonnet"})
+        agents.perform_role_plan(initial, "claude", "install")
+        global_path = self.home / ".claude/agents/getonmylevel-reviewer.md"
+        repo_path = self.repo / ".claude/agents/getonmylevel-reviewer.md"
+        global_update = agents.role_plan("claude", "global", None, ["reviewer"], {"reviewer": "opus"})
+        agents.perform_role_plan(global_update, "claude", "update")
+
+        gui = agents_gui.AgentConfigurator.__new__(agents_gui.AgentConfigurator)
+        gui.client = type("Value", (), {"get": lambda self: "claude"})()
+        gui.scope = type("Value", (), {"get": lambda self: "both"})()
+        repo_value = str(self.repo)
+        gui.repo_path = type("Value", (), {"get": lambda self: repo_value})()
+        gui.selected_roles = lambda: ["reviewer"]
+        gui.templates = agents.load_templates()
+        gui.model_vars = {"reviewer": type("Value", (), {"get": lambda self: ""})()}
+        gui.effort_vars = {"reviewer": type("Value", (), {"get": lambda self: ""})()}
+        gui.dirty_fields = {"claude": set()}
+        _roles, _roots, _templates, entries = gui.plan()
+        content_by_path = {path: content for _role, path, content in entries}
+        self.assertIn('model: "opus"', content_by_path[global_path])
+        self.assertIn('model: "sonnet"', content_by_path[repo_path])
+
+        gui.model_vars["reviewer"] = type("Value", (), {"get": lambda self: "haiku"})()
+        gui.dirty_fields["claude"].add(("reviewer", "model"))
+        _roles, _roots, _templates, entries = gui.plan()
+        self.assertTrue(all('model: "haiku"' in content for _role, _path, content in entries))
 
     def test_global_role_changes_require_yes(self):
         destination = self.home / ".codex/agents/getonmylevel_designer.toml"

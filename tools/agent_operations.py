@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,8 +27,35 @@ MAX_MODELS = 1000
 MAX_SECONDS = 20
 MARKER = "# getonmylevel-managed-v1"
 CLAUDE_MARKER = "<!-- getonmylevel-managed-v1 -->"
-CLAUDE_MODELS = ("", "inherit", "sonnet", "opus", "haiku", "fable")
+# Suggestions from Anthropic's model overview, not an availability allowlist.
+CLAUDE_MODELS = ("", "inherit", "sonnet", "opus", "haiku", "fable",
+                 "claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
 CLAUDE_EFFORTS = ("", "low", "medium", "high", "xhigh", "max")
+
+
+class RolePlan(list[tuple[str, Path, str | None]]):
+    """List-compatible role plan carrying Claude destination snapshots."""
+
+    def __init__(self, entries=(), *, snapshots: dict[Path, tuple | None] | None = None):
+        super().__init__(entries)
+        self.snapshots = snapshots or {}
+
+
+def _role_file_snapshot(path: Path) -> tuple | None:
+    """Identify a destination's contents and filesystem identity, or record absence."""
+    if common.is_link_or_reparse(path):
+        raise ValueError(f"Refusing linked or reparse-point destination path: {path}")
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return None
+    content_hash = hashlib.sha256(path.read_bytes()).digest()
+    after = path.lstat()
+    before_state = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    after_state = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    if before_state != after_state:
+        raise ValueError(f"Destination changed while preparing role configuration: {path}")
+    return (*after_state, content_hash)
 
 
 def find_codex() -> str:
@@ -310,6 +338,10 @@ def _claude_yaml_string(value: str) -> str:
 
 
 def render_claude_agent(expected: dict[str, str], model: str, effort: str) -> str:
+    if effort and effort not in CLAUDE_EFFORTS[1:]:
+        raise ValueError(
+            f"Unsupported Claude Code effort '{effort}'. Choose low, medium, high, xhigh, or max."
+        )
     fields = [f"name: {_claude_yaml_string(expected['name'])}",
               f"description: {_claude_yaml_string(expected['description'])}"]
     if model:
@@ -425,18 +457,24 @@ def role_plan(client: str, scope: str, repo: Path | None, roles: list[str],
         raise ValueError("The target repository must differ from this source checkout.")
     templates = load_templates()
     planned: list[tuple[str, Path, str | None]] = []
+    snapshots: dict[Path, tuple | None] = {}
     models, efforts = models or {}, efforts or {}
     for root in roots:
         common.check_managed_root(root)
         for role in roles:
             path = root / agent_filename(role, client)
-            if common.is_link_or_reparse(path):
+            snapshot = _role_file_snapshot(path) if client == "claude" else None
+            if client != "claude" and common.is_link_or_reparse(path):
                 raise ValueError(f"Refusing linked or reparse-point destination path: {path}")
             expected = claude_expected(role, templates[role]) if client in ("claude", "copilot") else templates[role]
             parser = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file}.get(client, parse_managed_file)
             existing_model, existing_effort = ("", "")
             if path.exists():
                 existing_model, existing_effort = parser(path, expected)
+            if client == "claude" and _role_file_snapshot(path) != snapshot:
+                raise ValueError(f"Destination changed while preparing role configuration: {path}")
+            if client == "claude":
+                snapshots[path] = snapshot
             if action == "remove":
                 if not path.exists():
                     raise FileNotFoundError(f"Managed role file is not installed: {path}")
@@ -446,9 +484,13 @@ def role_plan(client: str, scope: str, repo: Path | None, roles: list[str],
             effort = efforts.get(role, existing_effort).strip()
             if client == "copilot" and effort:
                 raise ValueError(f"GitHub Copilot does not support reasoning effort for {role}.")
+            if client == "claude" and effort and effort not in CLAUDE_EFFORTS[1:]:
+                raise ValueError(
+                    f"Unsupported Claude Code effort '{effort}' for {role}. Choose low, medium, high, xhigh, or max."
+                )
             renderer = {"claude": render_claude_agent, "copilot": render_copilot_agent}.get(client, render_agent)
             planned.append((role, path, renderer(expected, model, effort)))
-    return planned
+    return RolePlan(planned, snapshots=snapshots)
 
 
 def perform_role_plan(plan: list[tuple[str, Path, str | None]], client: str, action: str) -> tuple[list[str], list[str]]:
@@ -457,6 +499,13 @@ def perform_role_plan(plan: list[tuple[str, Path, str | None]], client: str, act
     templates = load_templates()
     parsers = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file}
     try:
+        snapshots = getattr(plan, "snapshots", None)
+        if client == "claude" and snapshots is not None:
+            # Check every destination before changing any file. In particular, an
+            # absent-at-plan-time target must remain absent to prevent late clobbers.
+            for _role, path, _content in plan:
+                if path not in snapshots or _role_file_snapshot(path) != snapshots[path]:
+                    raise ValueError(f"Claude agent destination changed since planning; refusing to overwrite: {path}")
         for role, path, content in plan:
             common.check_managed_root(path.parent)
             if common.is_link_or_reparse(path):

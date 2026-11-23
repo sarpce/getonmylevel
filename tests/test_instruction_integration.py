@@ -238,6 +238,32 @@ class InstructionIntegrationTests(unittest.TestCase):
             self.assertIn(phrase.casefold(), copied)
         self.assertIn("do not silently switch modes", copied)
 
+    def test_claude_agent_preview_runs_planner_validation(self):
+        class Preview:
+            def __init__(self):
+                self.text = ""
+
+            def configure(self, **_kwargs):
+                pass
+
+            def delete(self, *_args):
+                self.text = ""
+
+            def insert(self, _index, value):
+                self.text = value
+
+        gui = agents_gui.AgentConfigurator.__new__(agents_gui.AgentConfigurator)
+        gui.client = mock.Mock()
+        gui.client.get.return_value = "claude"
+        gui.selected_roles = mock.Mock(return_value=["designer"])
+        gui.selected_roots = mock.Mock(return_value=[self.root / ".claude/agents"])
+        gui.plan = mock.Mock(side_effect=ValueError("Unsupported Claude Code effort 'ultracode'"))
+        gui.preview = Preview()
+        gui.scope_conflicts = {}
+        gui.refresh_preview()
+        gui.plan.assert_called_once_with()
+        self.assertIn("Unsupported Claude Code effort 'ultracode'", gui.preview.text)
+
     def test_readme_explains_instruction_level_limit(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8").casefold()
         self.assertIn("cannot intercept client tool calls", readme)

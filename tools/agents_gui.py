@@ -43,6 +43,7 @@ class AgentConfigurator:
         self.templates = load_templates()
         self.client = tk.StringVar(value="codex")
         self.client_values = {"codex": {}, "claude": {}, "copilot": {}}
+        self.dirty_fields: dict[str, set[tuple[str, str]]] = {"codex": set(), "claude": set(), "copilot": set()}
         self.previous_client = "codex"
         self.model_choices: dict[str, dict[str, list[str]]] = {"codex": {}, "copilot": {}}
         self.refresh_queue: queue.Queue[tuple[str, bool, Any]] = queue.Queue()
@@ -92,6 +93,8 @@ class AgentConfigurator:
         self.effort_vars: dict[str, tk.StringVar] = {}
         self.model_widgets: dict[str, ttk.Combobox] = {}
         self.effort_widgets: dict[str, ttk.Combobox] = {}
+        self.model_labels: dict[str, ttk.Label] = {}
+        self.effort_labels: dict[str, ttk.Label] = {}
         self.role_cards = {}
         self.role_card_bodies = {}
         self.role_card_title_rows = {}
@@ -116,16 +119,22 @@ class AgentConfigurator:
             description = ttk.Label(body, text=self.templates[role]["description"], style="CardMuted.TLabel",
                                     wraplength=280, justify="left")
             description.pack(anchor="w", fill="x", pady=(4, 10))
-            ttk.Label(body, text="Model · blank uses client default", style="CardMuted.TLabel").pack(anchor="w")
+            model_label = ttk.Label(body, text="Model · blank uses client default", style="CardMuted.TLabel")
+            model_label.pack(anchor="w")
+            self.model_labels[role] = model_label
             model = ttk.Combobox(body, textvariable=self.model_vars[role], values=("",), width=24)
             model.pack(fill="x", pady=(3, 8))
             model.bind("<<ComboboxSelected>>", lambda _event, selected_role=role: self.model_changed(selected_role))
+            model.bind("<KeyRelease>", lambda _event, selected_role=role: self.mark_field_dirty(selected_role, "model"))
             model.bind("<FocusOut>", lambda _event, selected_role=role: self.refresh_preview())
             self.model_widgets[role] = model
-            ttk.Label(body, text="Effort · blank uses default", style="CardMuted.TLabel").pack(anchor="w")
+            effort_label = ttk.Label(body, text="Effort · blank uses default", style="CardMuted.TLabel")
+            effort_label.pack(anchor="w")
+            self.effort_labels[role] = effort_label
             effort = ttk.Combobox(body, textvariable=self.effort_vars[role], values=("",), width=14)
             effort.pack(anchor="w", fill="x", pady=(3, 0))
-            effort.bind("<<ComboboxSelected>>", lambda _event: self.refresh_preview())
+            effort.bind("<<ComboboxSelected>>", lambda _event, selected_role=role: self.effort_changed(selected_role))
+            effort.bind("<KeyRelease>", lambda _event, selected_role=role: self.mark_field_dirty(selected_role, "effort"))
             effort.bind("<FocusOut>", lambda _event: self.refresh_preview())
             self.effort_widgets[role] = effort
             self.role_cards[role] = card
@@ -224,11 +233,24 @@ class AgentConfigurator:
         roles = self.selected_roles()
         roots = self.selected_roots()
         repo = Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None
-        models = {role: self.model_vars[role].get() for role in roles}
-        efforts = {role: self.effort_vars[role].get() for role in roles}
+        if self.client.get() == "claude":
+            dirty = self.dirty_fields["claude"]
+            models = {role: self.model_vars[role].get() for role in roles if (role, "model") in dirty}
+            efforts = {role: self.effort_vars[role].get() for role in roles if (role, "effort") in dirty}
+        else:
+            # Keep the established Codex and Copilot form semantics unchanged.
+            models = {role: self.model_vars[role].get() for role in roles}
+            efforts = {role: self.effort_vars[role].get() for role in roles}
         planned = role_plan(self.client.get(), self.scope.get(), repo, roles, models, efforts)
-        entries = [(role, path, content) for role, path, content in planned if content is not None]
+        entries = planned
         return roles, roots, self.templates, entries
+
+    def mark_field_dirty(self, role: str, field: str) -> None:
+        self.dirty_fields[self.client.get()].add((role, field))
+
+    def effort_changed(self, role: str) -> None:
+        self.mark_field_dirty(role, "effort")
+        self.refresh_preview()
 
     def scope_changed(self) -> None:
         self.load_existing_values()
@@ -258,6 +280,7 @@ class AgentConfigurator:
 
     def model_changed(self, role: str) -> None:
         if self.client.get() == "claude":
+            self.mark_field_dirty(role, "model")
             self.effort_widgets[role]["values"] = CLAUDE_EFFORTS
             self.refresh_preview()
             return
@@ -284,8 +307,10 @@ class AgentConfigurator:
         claude = client == "claude"
         copilot = client == "copilot"
         if claude:
-            intro = "Add focused helpers to Claude Code. Set each role's model and effort, or leave them blank to inherit defaults."
-            status = "Claude Code has no local model discovery here. Suggested aliases are shown; enter any model ID supported by your account."
+            intro = "Add focused helpers to Claude Code. Set each role's model and effort independently."
+            status = ("Aliases and Claude API IDs are suggestions, not an availability check; enter any supported model ID. Blank model omits the field; "
+                      "inherit explicitly uses the spawning conversation's model. Blank effort omits the field and follows Claude Code's runtime resolution. "
+                      "Effort support varies by model and may be capped or lowered by Claude Code.")
         elif copilot:
             intro = "Add custom agents for GitHub Copilot CLI and VS Code. Set a model or leave it blank to inherit the default."
             status = "Model discovery is optional. You can enter values manually; reasoning effort is not available."
@@ -293,13 +318,22 @@ class AgentConfigurator:
             intro = "Add focused helpers to Codex. Choose a role, then set its model and reasoning effort."
             status = "Model discovery is optional. You can enter values manually."
         self.intro_label.configure(text=intro)
-        self.refresh_button.configure(text="Models are entered manually" if claude else f"Refresh available models from {'Copilot' if copilot else 'Codex'}...")
+        self.refresh_button.configure(text="Built-in suggestions; manual entry available" if claude else f"Refresh available models from {'Copilot' if copilot else 'Codex'}...")
         self.refresh_button.configure(state="disabled" if claude or self.refreshing else "normal")
         self.refresh_status.set(status)
         for role in common.AGENT_NAMES:
             model, effort = self.client_values[client].get(role, ("", ""))
             self.model_vars[role].set(model)
             self.effort_vars[role].set("" if copilot else effort)
+            if claude:
+                self.model_labels[role].configure(text="Model · blank omits; inherit uses parent model")
+                self.effort_labels[role].configure(text="Effort · blank omits; Claude resolves at runtime")
+            elif copilot:
+                self.model_labels[role].configure(text="Model · blank uses client default")
+                self.effort_labels[role].configure(text="Effort · not supported")
+            else:
+                self.model_labels[role].configure(text="Model · blank uses client default")
+                self.effort_labels[role].configure(text="Effort · blank uses default")
             if claude:
                 self.model_widgets[role]["values"] = CLAUDE_MODELS
                 self.effort_widgets[role]["values"] = CLAUDE_EFFORTS
@@ -373,6 +407,23 @@ class AgentConfigurator:
                 if self.client.get() == "copilot":
                     lines.append("\nModel (blank means inherit client default):")
                     lines.extend(f"  {role}: model={self.model_vars[role].get() or '(inherit)'}" for role in roles)
+                elif self.client.get() == "claude":
+                    # Use the same planner as the write action so invalid selections and
+                    # unmanaged or edited destination files are visible before confirmation.
+                    _planned_roles, _planned_roots, _templates, entries = self.plan()
+                    lines.append("\nClaude Code fields (blank omits the frontmatter field):")
+                    for role, path, content in entries:
+                        frontmatter = content.split("---\n", 2)[1]
+                        values = {}
+                        for field in frontmatter.splitlines():
+                            key, separator, value = field.partition(": ")
+                            if separator:
+                                values[key] = json.loads(value)
+                        lines.append(
+                            f"  {role} ({path}): model={values.get('model', '(omitted; Claude resolves at runtime)')}, "
+                            f"effort={values.get('effort', '(omitted; Claude resolves at runtime)')}"
+                        )
+                    lines.append("Explicit model=inherit follows the spawning conversation's model. Effort support varies by model; Claude Code may lower unsupported levels or apply account/policy caps.")
                 else:
                     lines.append("\nModel and effort (blank means inherit client defaults):")
                     lines.extend(f"  {role}: model={self.model_vars[role].get() or '(inherit)'}, effort={self.effort_vars[role].get() or '(inherit)'}" for role in roles)
@@ -380,7 +431,7 @@ class AgentConfigurator:
             for role in roles:
                 if role in self.scope_conflicts:
                     lines.append(f"Warning: existing values differ for {role}: {self.scope_conflicts[role]!r}. Choose values explicitly to unify them.")
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RuntimeError, UnicodeError, tomllib.TOMLDecodeError) as exc:
             lines = [f"Cannot prepare destinations: {exc}"]
         self.preview.configure(state="normal")
         self.preview.delete("1.0", "end")

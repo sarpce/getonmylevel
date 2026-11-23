@@ -16,3 +16,5 @@ The interface design skill was also informed by these projects:
 - [Impeccable](https://github.com/pbakaus/impeccable)
 
 No source material from these projects was copied. These references acknowledge inspiration and do not imply endorsement. Consult each project for its own license and terms.
+
+The focused-solutions skill adapts the workflow ideas in [Ponytail](https://github.com/DietrichGebert/ponytail) by Dietrich Gebert. The upstream project is licensed under MIT. Its copyright and permission notice is included in `skills/getonmylevel-simplicity/LICENSE` so the notice accompanies separately installed copies of the skill. The upstream notice applies to material derived from Ponytail; this repository's custom license applies to its original material. This reference does not imply endorsement.

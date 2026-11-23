@@ -18,6 +18,7 @@ SKILL_NAMES = (
     "getonmylevel-design",
     "getonmylevel-good-software-engineering-practices",
     "getonmylevel-skill-discovery",
+    "getonmylevel-simplicity",
 )
 AGENT_NAMES = ("designer", "implementer", "reviewer", "tester")
 

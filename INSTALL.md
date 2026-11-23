@@ -1,6 +1,6 @@
 # getonmylevel
 
-Six independently installable skills for Codex, Claude Code, or GitHub Copilot CLI and VS Code, plus optional role-agent templates and local setup tools.
+Seven independently installable skills for Codex, Claude Code, or GitHub Copilot CLI and VS Code, plus optional role-agent templates and local setup tools.
 
 ## Prerequisites
 
@@ -73,7 +73,7 @@ python tools/install.py install --client copilot --scope repo --repo /path/to/re
 python tools/install.py activate --client codex --scope user --skills none
 ```
 
-All six skills are selected by default; `--skills` accepts one or more exact skill names. `install` and `update` both install missing skills and update existing ones without changing activation. `activate` replaces the active set and installs missing selected skills; `--skills none` clears it. With `--scope both`, activate applies the same explicit selection to both scopes; run it separately for differing selections. Updates and removals preserve previous directories in `getonmylevel-backups`. Removal also removes the selected skills from managed default-use instructions, retaining other skill references and surrounding text. `--dry-run` previews actions without writing; normal commands apply immediately and return a nonzero exit status on failure. Operations across multiple paths are not transactional. This command handles bundled skills and their instructions. Agent roles, CodeGraph, and suggested integrations use the separate setup command below.
+All seven skills are selected by default; `--skills` accepts one or more exact skill names. `install` and `update` both install missing skills and update existing ones without changing activation. `activate` replaces the active set and installs missing selected skills; `--skills none` clears it. With `--scope both`, activate applies the same explicit selection to both scopes; run it separately for differing selections. Updates and removals preserve previous directories in `getonmylevel-backups`. Removal also removes the selected skills from managed default-use instructions, retaining other skill references and surrounding text. `--dry-run` previews actions without writing; normal commands apply immediately and return a nonzero exit status on failure. Operations across multiple paths are not transactional. This command handles bundled skills and their instructions. Agent roles, CodeGraph, and suggested integrations use the separate setup command below.
 
 ### Headless setup operations
 
@@ -112,7 +112,9 @@ Suggested integrations are supported for Codex and Claude Code. Claude supports 
 
 The optional selector instruction in [`optional/global-session-selector.md`](optional/global-session-selector.md) supports **On**, **Off**, and **Ask** preferences for the original five skills. It requests a Simple or Agentic mode choice for each software edit independently of skill selection, subject to the active session's rules. Merge it manually with your effective global instructions; it does not edit or override them. These are conversation conventions, not enforced Codex settings. The GUI can copy a generated instruction block without changing any file.
 
-Explicit skill invocation uses `$getonmylevel-communication`, `$getonmylevel-context`, `$getonmylevel-engineering`, `$getonmylevel-design`, `$getonmylevel-good-software-engineering-practices`, or `$getonmylevel-skill-discovery`. Higher-priority instructions and available tools always constrain activation; the installed client determines whether a skill is discovered and invoked.
+Explicit skill invocation uses `$getonmylevel-communication`, `$getonmylevel-context`, `$getonmylevel-engineering`, `$getonmylevel-design`, `$getonmylevel-good-software-engineering-practices`, `$getonmylevel-skill-discovery`, or `$getonmylevel-simplicity`. Higher-priority instructions and available tools always constrain activation; the installed client determines whether a skill is discovered and invoked.
+
+The focused-solutions skill adapts ideas from [Ponytail](https://github.com/DietrichGebert/ponytail) under its MIT license. It omits Ponytail's lite, full, and ultra levels because its core workflow is a useful default, while level selection would add prompts and ultra's automatic pushback could conflict with explicit user direction. The adaptation emphasizes completing the requested scope, preserving safety and quality, and choosing checks appropriate to risk.
 
 ## Optional agent roles
 

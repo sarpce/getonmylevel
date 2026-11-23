@@ -2,7 +2,7 @@
 
 **Practical skills and optional agent roles for Codex, Claude Code, and GitHub Copilot CLI/VS Code.**
 
-Six skills for communication, context, engineering, design, software practices, and skill discovery. Choose what you need.
+Seven skills for communication, context, engineering, design, software practices, skill discovery, and focused solutions. Choose what you need.
 
 ## Skills
 
@@ -14,6 +14,7 @@ Six skills for communication, context, engineering, design, software practices, 
 | [Design](skills/getonmylevel-design/SKILL.md) | Design deliberate, usable interfaces. |
 | [Good software engineering practices](skills/getonmylevel-good-software-engineering-practices/SKILL.md) | Keep software changes correct, secure, and maintainable. |
 | [Skill discovery](skills/getonmylevel-skill-discovery/SKILL.md) | Find useful available skills for each task. |
+| [Focused solutions](skills/getonmylevel-simplicity/SKILL.md) | Solve the complete task with the simplest maintainable change. |
 
 Optional **designer, implementer, reviewer, and tester** templates provide roles for Codex, Claude Code, and GitHub Copilot. Skills are instructions, not magic switches: actual behavior depends on client support, available tools, and higher-priority instructions.
 
@@ -46,7 +47,9 @@ The separate [`tools/setup.py`](INSTALL.md#headless-setup-operations) command ma
 
 ## Use skills and agents
 
-The Active by default checklist controls which installed skills the selected client is asked to read when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering` or `$getonmylevel-design`. Your instructions and higher-priority rules still apply.
+The Active by default checklist controls which installed skills the selected client is asked to read when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering`, `$getonmylevel-design`, or `$getonmylevel-simplicity`. Your instructions and higher-priority rules still apply.
+
+The focused-solutions skill adapts ideas from Ponytail under its MIT license. It omits lite, full, and ultra levels: the core workflow is the useful default, while asking users to choose a level or automatically challenging their request would add friction and could conflict with explicit direction. See [attribution](ATTRIBUTION.md).
 
 When communication, engineering, or good software engineering practices is active, every new request involving a software edit requires a fresh choice between Simple and Agentic modes before editing or delegating, including small fixes and documentation changes. Read-only investigation may continue while the answer is pending. Simple means working directly; Agentic uses agents when delegation is permitted. In Agentic mode, independent review and testing are separate choices, each disabled unless selected. Activating the engineering skill also adds a standing request for delegation in Agentic mode to the installer-managed instructions. These are natural-language instructions: the project cannot intercept client tool calls. It cannot guarantee that a choice was presented or recorded. Existing installations receive updated instructions when the selected skills are applied or updated. If Agentic mode is unavailable, explain why and ask the user how to proceed. Higher-priority session instructions still apply.
 

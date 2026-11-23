@@ -30,6 +30,7 @@ SKILL_DESCRIPTIONS = {
     "getonmylevel-design": ("Interface design", "Create deliberate, accessible interfaces with a coherent visual system."),
     "getonmylevel-good-software-engineering-practices": ("Software practices", "Build reliable, maintainable changes that fit the existing project."),
     "getonmylevel-skill-discovery": ("Skill discovery", "Find and apply available skills when they can help with the task."),
+    "getonmylevel-simplicity": ("Focused solutions", "Solve the complete task with the simplest maintainable change."),
 }
 
 

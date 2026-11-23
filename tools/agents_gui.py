@@ -1,8 +1,9 @@
-"""Configure optional getonmylevel Codex agents or Claude Code subagents."""
+"""Configure optional getonmylevel roles for Codex, Claude Code, and GitHub Copilot."""
 
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 from pathlib import Path
 import platform
@@ -225,6 +226,40 @@ class AppServer:
                     pass
 
 
+def copilot_models() -> dict[str, list[str]]:
+    """Query models through the optional Copilot SDK's compatible runtime."""
+    try:
+        from copilot import CopilotClient, RuntimeConnection
+    except ImportError as exc:
+        raise RuntimeError("Install the optional Microsoft Copilot SDK: python -m pip install microsoft-copilot-sdk") from exc
+    async def query() -> dict[str, list[str]]:
+        client = CopilotClient(mode="coding-agent", runtime=RuntimeConnection.for_spawned_stdio())
+        try:
+            await asyncio.wait_for(client.start(), timeout=MAX_SECONDS)
+            auth = await asyncio.wait_for(client.get_auth_status(), timeout=MAX_SECONDS)
+            if not auth.is_authenticated:
+                raise RuntimeError(
+                    "Copilot is not authenticated. Install GitHub Copilot CLI and run "
+                    "'copilot login' in a terminal, then restart this application and refresh. "
+                    "Signing in to VS Code alone may not authenticate the SDK runtime."
+                )
+            models = await asyncio.wait_for(client.list_models(), timeout=MAX_SECONDS)
+            if len(models) > MAX_MODELS:
+                raise RuntimeError("Copilot returned more models than the configured safety limit.")
+            choices = {}
+            for model in models:
+                model_id = model.id
+                if not isinstance(model_id, str) or not model_id.strip():
+                    raise RuntimeError("Copilot returned a model without an identifier.")
+                name = model.name
+                choices[model_id] = [f"{name} ({model_id})" if isinstance(name, str) and name else model_id]
+            return choices
+        finally:
+            await asyncio.wait_for(client.stop(), timeout=MAX_SECONDS)
+
+    return asyncio.run(query())
+
+
 def load_templates() -> dict[str, dict[str, str]]:
     templates: dict[str, dict[str, str]] = {}
     for role in common.AGENT_NAMES:
@@ -291,16 +326,55 @@ def render_claude_agent(expected: dict[str, str], model: str, effort: str) -> st
     return "---\n" + "\n".join(fields) + "\n---\n" + CLAUDE_MARKER + "\n" + expected["developer_instructions"].rstrip() + "\n"
 
 
+def render_copilot_agent(expected: dict[str, str], model: str, effort: str = "") -> str:
+    fields = [f"name: {_claude_yaml_string(expected['name'])}",
+              f"description: {_claude_yaml_string(expected['description'])}"]
+    if model:
+        fields.append(f"model: {_claude_yaml_string(model)}")
+    return "---\n" + "\n".join(fields) + "\n---\n" + COPILOT_MARKER + "\n" + expected["developer_instructions"].rstrip() + "\n"
+
+
 def claude_expected(role: str, template: dict[str, str]) -> dict[str, str]:
     return {**template, "name": f"getonmylevel-{role}"}
 
 
+COPILOT_MARKER = "<!-- Managed by getonmylevel for GitHub Copilot. -->"
+
+
 def agent_filename(role: str, client: str) -> str:
-    if role not in common.AGENT_NAMES or client not in ("codex", "claude"):
+    if role not in common.AGENT_NAMES or client not in ("codex", "claude", "copilot"):
         raise ValueError("Unknown agent role or client.")
+    if client == "copilot":
+        return f"getonmylevel-{role}.agent.md"
     separator = "-" if client == "claude" else "_"
     extension = "md" if client == "claude" else "toml"
     return f"getonmylevel{separator}{role}.{extension}"
+
+
+def parse_copilot_managed_file(path: Path, expected: dict[str, str]) -> tuple[str, str]:
+    if common.is_link_or_reparse(path):
+        raise ValueError(f"Refusing to update linked or reparse-point file: {path}")
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    if len(lines) < 5 or lines[0] != "---":
+        raise ValueError(f"Existing file is not a Copilot agent managed by this tool: {path}")
+    try:
+        end = lines.index("---", 1)
+    except ValueError as exc:
+        raise ValueError(f"Copilot agent frontmatter is malformed: {path}") from exc
+    fields = {}
+    for line in lines[1:end]:
+        match = re.fullmatch(r"(name|description|model): (\"(?:[^\"\\]|\\.)*\")", line)
+        if not match or match.group(1) in fields:
+            raise ValueError(f"Copilot agent frontmatter has unexpected or malformed fields: {path}")
+        fields[match.group(1)] = json.loads(match.group(2))
+    body = "\n".join(lines[end + 1:])
+    expected_body = COPILOT_MARKER + "\n" + expected["developer_instructions"].rstrip()
+    if fields.get("name") != expected["name"] or fields.get("description") != expected["description"] or body != expected_body:
+        raise ValueError(f"Existing file was edited outside model settings; refusing to replace: {path}")
+    if set(fields) - {"name", "description", "model"}:
+        raise ValueError(f"Existing file has unrecognized fields: {path}")
+    return fields.get("model", ""), ""
 
 
 def parse_claude_managed_file(path: Path, expected: dict[str, str]) -> tuple[str, str]:
@@ -353,9 +427,11 @@ class AgentConfigurator:
             root.minsize(760, 620)
         self.templates = load_templates()
         self.client = tk.StringVar(value="codex")
-        self.client_values = {"codex": {}, "claude": {}}
-        self.model_choices: dict[str, list[str]] = {}
-        self.refresh_queue: queue.Queue[tuple[bool, Any]] = queue.Queue()
+        self.client_values = {"codex": {}, "claude": {}, "copilot": {}}
+        self.previous_client = "codex"
+        self.model_choices: dict[str, dict[str, list[str]]] = {"codex": {}, "copilot": {}}
+        self.refresh_queue: queue.Queue[tuple[str, bool, Any]] = queue.Queue()
+        self.refreshing = False
         self.scope_conflicts: dict[str, list[tuple[str, str]]] = {}
 
         outer = ttk.Frame(parent or root, padding=18)
@@ -368,7 +444,7 @@ class AgentConfigurator:
         client_row = ttk.Frame(outer)
         client_row.pack(fill="x", pady=(0, 8))
         ttk.Label(client_row, text="Client:").pack(side="left")
-        for label, value in (("Codex", "codex"), ("Claude Code", "claude")):
+        for label, value in (("Codex", "codex"), ("Claude Code", "claude"), ("GitHub Copilot", "copilot")):
             ttk.Radiobutton(client_row, text=label, value=value, variable=self.client,
                             command=self.client_changed).pack(side="left", padx=6)
 
@@ -542,10 +618,10 @@ class AgentConfigurator:
                     raise ValueError(f"Refusing to update symlink: {path}")
                 model = self.model_vars[role].get().strip()
                 effort = self.effort_vars[role].get().strip()
-                expected = claude_expected(role, templates[role]) if self.client.get() == "claude" else templates[role]
+                expected = claude_expected(role, templates[role]) if self.client.get() in ("claude", "copilot") else templates[role]
                 if path.exists():
-                    (parse_claude_managed_file if self.client.get() == "claude" else parse_managed_file)(path, expected)
-                renderer = render_claude_agent if self.client.get() == "claude" else render_agent
+                    {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file}.get(self.client.get(), parse_managed_file)(path, expected)
+                renderer = {"claude": render_claude_agent, "copilot": render_copilot_agent}.get(self.client.get(), render_agent)
                 entries.append((role, path, renderer(expected, model, effort)))
         return roles, roots, templates, entries
 
@@ -562,8 +638,8 @@ class AgentConfigurator:
                 for root in roots:
                     path = root / agent_filename(role, self.client.get())
                     if path.exists() and not path.is_symlink():
-                        parser = parse_claude_managed_file if self.client.get() == "claude" else parse_managed_file
-                        expected = claude_expected(role, self.templates[role]) if self.client.get() == "claude" else self.templates[role]
+                        parser = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file}.get(self.client.get(), parse_managed_file)
+                        expected = claude_expected(role, self.templates[role]) if self.client.get() in ("claude", "copilot") else self.templates[role]
                         candidates.append(parser(path, expected))
                 if candidates and len(set(candidates)) == 1:
                     model, effort = candidates[0]
@@ -582,52 +658,75 @@ class AgentConfigurator:
             return
         model_text = self.model_vars[role].get()
         selected_id = None
-        for model_id, values in self.model_choices.items():
+        choices = self.model_choices[self.client.get()]
+        for model_id, values in choices.items():
             if model_text == model_id or model_text == values[0]:
                 selected_id = model_id
                 break
         if selected_id is not None:
             self.model_vars[role].set(selected_id)
-            efforts = [""] + self.model_choices[selected_id][1:]
+            efforts = [""] + choices[selected_id][1:]
             self.effort_widgets[role]["values"] = efforts
             if self.effort_vars[role].get() not in efforts:
                 self.effort_vars[role].set("")
         self.refresh_preview()
 
     def client_changed(self) -> None:
-        previous = "claude" if self.client.get() == "codex" else "codex"
+        previous = self.previous_client
         for role in common.AGENT_NAMES:
             self.client_values[previous][role] = (self.model_vars[role].get(), self.effort_vars[role].get())
-        claude = self.client.get() == "claude"
-        self.intro_label.configure(text="Add focused helpers to Claude Code. Set each role’s model and effort, or leave them blank to inherit defaults." if claude else "Add focused helpers to Codex. Choose a role, then set its model and reasoning effort.")
-        self.refresh_button.configure(text="Claude Code models are entered manually" if claude else "Refresh available models from Codex...")
-        self.refresh_button.configure(state="disabled" if claude else "normal")
-        self.refresh_status.set("Claude Code has no local model discovery here. Suggested aliases are shown; enter any model ID supported by your account." if claude else "Model discovery is optional. You can enter values manually.")
+        client = self.client.get()
+        claude = client == "claude"
+        copilot = client == "copilot"
+        if claude:
+            intro = "Add focused helpers to Claude Code. Set each role's model and effort, or leave them blank to inherit defaults."
+            status = "Claude Code has no local model discovery here. Suggested aliases are shown; enter any model ID supported by your account."
+        elif copilot:
+            intro = "Add custom agents for GitHub Copilot CLI and VS Code. Set a model or leave it blank to inherit the default."
+            status = "Model discovery is optional. You can enter values manually; reasoning effort is not available."
+        else:
+            intro = "Add focused helpers to Codex. Choose a role, then set its model and reasoning effort."
+            status = "Model discovery is optional. You can enter values manually."
+        self.intro_label.configure(text=intro)
+        self.refresh_button.configure(text="Models are entered manually" if claude else f"Refresh available models from {'Copilot' if copilot else 'Codex'}...")
+        self.refresh_button.configure(state="disabled" if claude or self.refreshing else "normal")
+        self.refresh_status.set(status)
         for role in common.AGENT_NAMES:
-            model, effort = self.client_values[self.client.get()].get(role, ("", ""))
+            model, effort = self.client_values[client].get(role, ("", ""))
             self.model_vars[role].set(model)
-            self.effort_vars[role].set(effort)
+            self.effort_vars[role].set("" if copilot else effort)
             if claude:
                 self.model_widgets[role]["values"] = CLAUDE_MODELS
                 self.effort_widgets[role]["values"] = CLAUDE_EFFORTS
+                self.effort_widgets[role].configure(state="normal")
+            elif copilot:
+                self.model_widgets[role]["values"] = [""] + [details[0] for details in self.model_choices["copilot"].values()]
+                self.effort_widgets[role].configure(state="disabled")
             else:
-                self.model_widgets[role]["values"] = [""] + [details[0] for details in self.model_choices.values()]
-                self.effort_widgets[role]["values"] = [""] + list(dict.fromkeys(e for values in self.model_choices.values() for e in values[1:]))
+                self.model_widgets[role]["values"] = [""] + [details[0] for details in self.model_choices["codex"].values()]
+                self.effort_widgets[role]["values"] = [""] + list(dict.fromkeys(e for values in self.model_choices["codex"].values() for e in values[1:]))
+                self.effort_widgets[role].configure(state="normal")
+        self.previous_client = client
         self.scope_changed()
 
     def refresh_models(self) -> None:
-        if self.client.get() == "claude":
+        client = self.client.get()
+        if client == "claude" or self.refreshing:
             return
+        self.refreshing = True
         self.refresh_button.configure(state="disabled")
-        self.refresh_status.set("Querying the local Codex app-server…")
+        self.refresh_status.set(f"Querying {client.capitalize()} for available models…")
         def worker() -> None:
             server = None
             try:
-                server = AppServer()
-                models = server.models()
-                self.refresh_queue.put((True, models))
+                if client == "copilot":
+                    models = copilot_models()
+                else:
+                    server = AppServer()
+                    models = server.models()
+                self.refresh_queue.put((client, True, models))
             except Exception as exc:
-                self.refresh_queue.put((False, str(exc)))
+                self.refresh_queue.put((client, False, str(exc)))
             finally:
                 if server is not None:
                     server.close()
@@ -636,12 +735,18 @@ class AgentConfigurator:
 
     def poll_refresh(self) -> None:
         try:
-            ok, value = self.refresh_queue.get_nowait()
+            client, ok, value = self.refresh_queue.get_nowait()
         except queue.Empty:
             self.root.after(150, self.poll_refresh)
             return
+        self.refreshing = False
         if ok:
-            self.model_choices = value
+            self.model_choices[client] = value
+        if client != self.client.get():
+            self.refresh_button.configure(state="disabled" if self.client.get() == "claude" else "normal")
+            self.root.after(150, self.poll_refresh)
+            return
+        if ok:
             labels = [""] + [details[0] for details in value.values()]
             for role in common.AGENT_NAMES:
                 self.model_widgets[role]["values"] = labels
@@ -660,8 +765,12 @@ class AgentConfigurator:
             lines = [f"Selected roles: {', '.join(roles) if roles else '(none selected)'}", "Destinations:"]
             lines.extend(f"  {root / agent_filename(role, self.client.get())}" for root in roots for role in roles)
             if roles:
-                lines.append("\nModel and effort (blank means inherit client defaults):")
-                lines.extend(f"  {role}: model={self.model_vars[role].get() or '(inherit)'}, effort={self.effort_vars[role].get() or '(inherit)'}" for role in roles)
+                if self.client.get() == "copilot":
+                    lines.append("\nModel (blank means inherit client default):")
+                    lines.extend(f"  {role}: model={self.model_vars[role].get() or '(inherit)'}" for role in roles)
+                else:
+                    lines.append("\nModel and effort (blank means inherit client defaults):")
+                    lines.extend(f"  {role}: model={self.model_vars[role].get() or '(inherit)'}, effort={self.effort_vars[role].get() or '(inherit)'}" for role in roles)
             lines.append("\nExisting files are updated only when their marker and template text match exactly. No instruction file or client config is edited.")
             for role in roles:
                 if role in self.scope_conflicts:
@@ -685,8 +794,8 @@ class AgentConfigurator:
                 if common.is_link_or_reparse(path):
                     raise ValueError(f"Refusing linked or reparse-point destination path: {path}")
                 if path.exists():
-                    expected = claude_expected(_role, templates[_role]) if self.client.get() == "claude" else templates[_role]
-                    (parse_claude_managed_file if self.client.get() == "claude" else parse_managed_file)(path, expected)
+                    expected = claude_expected(_role, templates[_role]) if self.client.get() in ("claude", "copilot") else templates[_role]
+                    {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file}.get(self.client.get(), parse_managed_file)(path, expected)
                 write_atomic(path, content)
                 written.append(str(path))
             messagebox.showinfo("Configuration complete", "Written:\n" + "\n".join(written))

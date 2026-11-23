@@ -14,6 +14,8 @@ PACKAGE = "@colbymchenry/codegraph"
 PACKAGE_VERSION = "1.6.4"
 PINNED_PACKAGE = f"{PACKAGE}@{PACKAGE_VERSION}"
 def install_args(client: str = "codex") -> tuple[str, ...]:
+    if client == "copilot":
+        return ("install", "--target=copilot-cli,copilot-vscode", "--location=global", "--yes")
     if client not in ("codex", "claude"):
         raise ValueError(f"Unsupported CodeGraph target: {client}")
     return ("install", f"--target={client}", "--location=global", "--yes")
@@ -24,7 +26,7 @@ TIMEOUT_SECONDS = 900
 
 
 def _client_label(client: str) -> str:
-    return "Claude Code" if client == "claude" else "Codex"
+    return {"claude": "Claude Code", "copilot": "GitHub Copilot CLI and VS Code", "codex": "Codex"}[client]
 
 
 @dataclass(frozen=True)

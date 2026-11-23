@@ -8,7 +8,7 @@ import skill_operations as operations
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("install", "update", "remove", "activate"))
-    parser.add_argument("--client", choices=("codex", "claude"), default="codex")
+    parser.add_argument("--client", choices=("codex", "claude", "copilot"), default="codex")
     parser.add_argument("--scope", choices=("user", "repo", "both"), default="user")
     parser.add_argument("--repo", help="existing target directory for repository scope")
     parser.add_argument("--skills", nargs="+", choices=("all", "none", *common.SKILL_NAMES), default=["all"])

@@ -1,19 +1,19 @@
 # getonmylevel
 
-Six independently installable skills for Codex or Claude Code, plus optional role-agent templates and local setup tools.
+Six independently installable skills for Codex, Claude Code, or GitHub Copilot CLI and VS Code, plus optional role-agent templates and local setup tools.
 
 ## Prerequisites
 
 - Git to clone this repository.
 - Python 3.11 or newer for the setup tools. They use the standard library; the graphical tools also require a Python build with Tkinter and a graphical display.
-- Codex or Claude Code for client-native discovery. See the [Codex skills documentation](https://developers.openai.com/codex/skills) and the [Claude Code skills](https://code.claude.com/docs/en/skills), [subagents](https://code.claude.com/docs/en/sub-agents), and [memory](https://code.claude.com/docs/en/memory) documentation.
+- Codex, Claude Code, or GitHub Copilot CLI/VS Code for client-native discovery. See the [Codex skills documentation](https://developers.openai.com/codex/skills) and the [Claude Code skills](https://code.claude.com/docs/en/skills), [subagents](https://code.claude.com/docs/en/sub-agents), and [memory](https://code.claude.com/docs/en/memory) documentation.
 
 ```sh
 git clone https://github.com/sarpce/getonmylevel.git
 cd getonmylevel
 ```
 
-Choose Codex or Claude Code in the installer. The Active by default checklist integrates selected skills into the selected client's instruction file with a managed block that asks the client to read them by default when relevant. This natural-language preference remains subject to instruction precedence, client behavior, file-size limits, and skill availability. Skill installation itself does not change client settings. CodeGraph is independently selectable for either client; the context skill does not require it or Node.js and npm.
+Choose Codex, Claude Code, or GitHub Copilot in the installer. The Active by default checklist integrates selected skills into the selected client's instruction file with a managed block that asks the client to read them by default when relevant. This natural-language preference remains subject to instruction precedence, client behavior, file-size limits, and skill availability. Skill installation itself does not change client settings. CodeGraph is independently selectable for Codex and Claude Code and can target Copilot CLI and VS Code together; the context skill does not require it or Node.js and npm.
 
 ## Install skills
 
@@ -27,26 +27,26 @@ Choose a client and select one or more skills, CodeGraph, or both. For skills, c
 
 ### Client capabilities and paths
 
-| | Codex | Claude Code |
+| | Codex | Claude Code | GitHub Copilot CLI and VS Code |
 | --- | --- | --- |
-| User-wide skills | `~/.agents/skills` | `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills` |
-| User-wide instructions | `$CODEX_HOME/AGENTS.md` or `~/.codex/AGENTS.md` | `$CLAUDE_CONFIG_DIR/CLAUDE.md` or `~/.claude/CLAUDE.md` |
-| Repository skills and instructions | `<repo>/.agents/skills`, `<repo>/AGENTS.md` | `<repo>/.claude/skills`, `<repo>/CLAUDE.md` |
-| Agent files, user-wide | `$CODEX_HOME/agents` or `~/.codex/agents` (TOML) | `$CLAUDE_CONFIG_DIR/agents` or `~/.claude/agents` (Markdown) |
-| Agent files, repository | `<repo>/.codex/agents` (TOML) | `<repo>/.claude/agents` (Markdown) |
-| Optional integrations | CodeGraph; suggested tools section | CodeGraph; suggested tools section disabled |
+| User-wide skills | `~/.agents/skills` | `$CLAUDE_CONFIG_DIR/skills` or `~/.claude/skills` | `~/.copilot/skills` |
+| User-wide instructions | `$CODEX_HOME/AGENTS.md` or `~/.codex/AGENTS.md` | `$CLAUDE_CONFIG_DIR/CLAUDE.md` or `~/.claude/CLAUDE.md` | `~/.copilot/copilot-instructions.md` |
+| Repository skills and instructions | `<repo>/.agents/skills`, `<repo>/AGENTS.md` | `<repo>/.claude/skills`, `<repo>/CLAUDE.md` | `<repo>/.github/skills`, `<repo>/.github/copilot-instructions.md` |
+| Agent files, user-wide | `$CODEX_HOME/agents` or `~/.codex/agents` (TOML) | `$CLAUDE_CONFIG_DIR/agents` or `~/.claude/agents` (Markdown) | `~/.copilot/agents` (Markdown) |
+| Agent files, repository | `<repo>/.codex/agents` (TOML) | `<repo>/.claude/agents` (Markdown) | `<repo>/.github/agents` (Markdown) |
+| Optional integrations | CodeGraph; suggested tools section | CodeGraph; suggested tools section disabled | CodeGraph; suggested tools section disabled |
 
 Environment-variable paths apply when the variable is set; otherwise the home-directory path is used. For Codex instructions, the installer selects a nonempty `AGENTS.override.md` in preference to `AGENTS.md` at either scope. **Both** writes to both selected scope locations and may cause duplicate skill discovery; usually choose one. Skills and agents have separate client and scope controls and separate confirmations. Start a new conversation if changed instructions are not picked up; restart the selected client if new skills are not discovered or the CodeGraph MCP server is unavailable. Client behavior depends on its version and configuration.
 
-In **Agents**, Codex roles use the existing TOML format and local Codex model discovery. Claude Code roles use native Markdown subagent files. Model and effort fields are editable for each role; Claude offers common aliases as suggestions and also accepts full model IDs. A selected ID does not guarantee account access or model availability. The suggested RTK, Last 30 Days, and CLI-Anything installers are Codex-only and are disabled when Claude Code is selected. CodeGraph can be configured for either client.
+In **Agents**, Codex roles use the existing TOML format and local Codex model discovery. Claude Code roles use native Markdown subagent files. GitHub Copilot roles use `.agent.md` profiles shared by Copilot CLI and VS Code. Model and effort fields are editable for each role; Claude offers common aliases as suggestions and also accepts full model IDs. A selected ID does not guarantee account access or model availability. The suggested tools are Codex-only and are disabled for Claude Code and GitHub Copilot. CodeGraph can be configured for Codex, Claude Code, and GitHub Copilot CLI and VS Code together.
 
 The **Active by default** checklist is independent of the core skill install/update selection. It starts with the existing managed selections; applying it replaces the active set for each displayed scope. When Both is selected, user-wide and repository checklists remain separate. Unchecking a skill leaves its files installed for explicit use. Clearing a checklist removes its managed block. The preview shows any missing skill files that must be installed before activation and the proposed instruction changes. The managed block preserves surrounding instruction bytes. Malformed or manually edited managed blocks are refused for manual repair. To turn off the default preference, select the client and scope and use **Remove getonmylevel instructions** in the GUI, or remove the exact region beginning `<!-- getonmylevel-skills:begin -->` and ending `<!-- getonmylevel-skills:end -->`. Either leaves installed skill directories in place. Instructions are subject to higher-priority guidance and Codex's `project_doc_max_bytes` limit, so a large instruction file may prevent the block from being read.
 
-Activating **getonmylevel-skill-discovery** asks the client to read that skill when relevant; its discovery guidance remains in the skill file. The GUI labels the bundled choices **Core skills**. CodeGraph is an independent recommendation for Codex and Claude Code, whether or not the context skill is selected. If explicitly selected and missing, Node.js and npm are required to install it. Global setup may download packages and changes the selected client's MCP configuration and managed instructions. The GUI does not initialize or index a project; indexing is a separate choice. When managed instructions are active, the client is instructed to use an existing index for repository context and offer indexing when a project has none. Client behavior remains subject to instruction precedence and tool availability. Restart the selected client if its MCP server is not available.
+Activating **getonmylevel-skill-discovery** asks the client to read that skill when relevant; its discovery guidance remains in the skill file. The GUI labels the bundled choices **Core skills**. CodeGraph is an independent recommendation for Codex, Claude Code, and Copilot CLI plus VS Code, whether or not the context skill is selected. If explicitly selected and missing, Node.js and npm are required to install it. Global setup may download packages and changes the selected client's MCP configuration and managed instructions. The GUI does not initialize or index a project; indexing is a separate choice. When managed instructions are active, the client is instructed to use an existing index for repository context and offer indexing when a project has none. Client behavior remains subject to instruction precedence and tool availability. Restart the selected client if its MCP server is not available.
 
 ### Suggested skillsets and tools
 
-The Codex view includes an unchecked-by-default **Suggested skillsets and tools** section for [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), [CLI-Anything](https://github.com/HKUDS/CLI-Anything), [Impeccable](https://github.com/pbakaus/impeccable), [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill), and [Anti UI Slop](https://github.com/uizze/uizze); the section is disabled for Claude Code. It detects the suggested skills in `~/.agents/skills` and `$CODEX_HOME/skills` (or `~/.codex/skills` when `CODEX_HOME` is unset), shows every detected location, and lets you install absent skills or remove detected skill directories. Use **Refresh status** to rescan. Removals list the exact directories and require confirmation; linked paths or trees without `SKILL.md` are refused. Installations refuse to create a duplicate when either supported location already contains the skill. Each operation reports its result independently.
+The Codex view includes an unchecked-by-default **Suggested skillsets and tools** section for [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), [CLI-Anything](https://github.com/HKUDS/CLI-Anything), [Impeccable](https://github.com/pbakaus/impeccable), [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill), and [Anti UI Slop](https://github.com/uizze/uizze); the section is disabled for Claude Code and GitHub Copilot. It detects the suggested skills in `~/.agents/skills` and `$CODEX_HOME/skills` (or `~/.codex/skills` when `CODEX_HOME` is unset), shows every detected location, and lets you install absent skills or remove detected skill directories. Use **Refresh status** to rescan. Removals list the exact directories and require confirmation; linked paths or trees without `SKILL.md` are refused. Installations refuse to create a duplicate when either supported location already contains the skill. Each operation reports its result independently.
 
 Last 30 Days requires Git and installs the complete upstream `skills/last30days` directory to `~/.agents/skills/last30days` from selected commit `bb2f1ed2b9f6d07b90557c5eebd736b566533fec`. CLI-Anything requires Git plus PowerShell on Windows or Bash on macOS/Linux. It runs the upstream Codex skill installer from selected commit `34f519533bc175d2fe287ab8316b0dd99bb9cc43`, which installs the generator skill and its supporting resources to `$CODEX_HOME/skills/cli-anything` or `~/.codex/skills/cli-anything`; it does not install all application harnesses. The installer fetches each commit, checks out detached, and verifies `HEAD` before copying or executing. These selected revisions have not been represented as integration-tested. Last 30 Days files are copied without executing their code. CLI-Anything executes upstream code with your user privileges.
 
@@ -62,13 +62,14 @@ Maintainers update pins in `tools/codegraph_installer.py` (`PACKAGE_VERSION`) an
 
 ### Scriptable installation
 
-The command works without Tkinter or a display, for Codex and Claude Code. It requires Python 3.11 or newer and uses only the standard library. Run it from the checkout (or use the full path to `tools/install.py`):
+The command works without Tkinter or a display, for Codex, Claude Code, and GitHub Copilot. It requires Python 3.11 or newer and uses only the standard library. Run it from the checkout (or use the full path to `tools/install.py`):
 
 ```sh
 python tools/install.py install --client codex --scope user
 python tools/install.py update --client claude --scope repo --repo /path/to/repository
 python tools/install.py remove --client codex --scope user --skills getonmylevel-context
 python tools/install.py activate --client claude --scope repo --repo /path/to/repository --skills getonmylevel-design --dry-run
+python tools/install.py install --client copilot --scope repo --repo /path/to/repository --dry-run
 python tools/install.py activate --client codex --scope user --skills none
 ```
 
@@ -82,7 +83,7 @@ Explicit skill invocation uses `$getonmylevel-communication`, `$getonmylevel-con
 
 ## Optional agent roles
 
-The optional templates in [`optional/agents`](optional/agents) configure designer, implementer, reviewer, and tester roles separately from the skills. Run the GUI with:
+The optional templates in [`optional/agents`](optional/agents) configure designer, implementer, reviewer, and tester roles separately from the skills for Codex, Claude Code, and GitHub Copilot. Run the GUI with:
 
 ```sh
 python tools/agents_gui.py
@@ -90,7 +91,7 @@ python tools/agents_gui.py
 
 Choose the client, roles, and global user, repository, or both scopes. Destinations and file formats are listed in the [client table](#client-capabilities-and-paths). The tool shows a preview and requires confirmation. It updates only files bearing its management marker and exact template instructions, preserving existing model and reasoning-effort values in editable controls. Unknown or hand-edited templates and symlinks are refused. Each file replacement is atomic; a set of files is not transactional. It does not edit client instruction or configuration files.
 
-Model and effort fields are editable; blank values inherit client defaults. For Codex, **Refresh available models** explicitly queries the local `codex app-server`; it requires Codex on `PATH` or, on Windows, the Codex VS Code extension installed in its standard location. It uses the documented [`model/list` API](https://developers.openai.com/codex/app-server) and [`agents` configuration](https://developers.openai.com/codex/multi-agent). Model discovery may be unavailable; in that case enter values manually. Claude Code offers model aliases as suggestions and accepts full IDs. A selected model does not guarantee account access or entitlement. The tool does not log credentials or make network calls itself.
+Model and effort fields are editable where supported; Copilot profiles support an optional model and do not set reasoning effort. Blank model values inherit client defaults. For Codex, **Refresh available models** explicitly queries the local `codex app-server`; it requires Codex on `PATH` or, on Windows, the Codex VS Code extension installed in its standard location. It uses the documented [`model/list` API](https://developers.openai.com/codex/app-server) and [`agents` configuration](https://developers.openai.com/codex/multi-agent). For Copilot, refresh uses the [Copilot Python SDK](https://github.com/github/copilot-sdk/tree/main/python). Install the optional SDK in the Python environment running the GUI with `python -m pip install microsoft-copilot-sdk`. The SDK uses its compatible runtime and may download it on first use; listing models contacts GitHub and requires Copilot authentication. Discovery may be unavailable; in that case enter values manually. Claude Code offers model aliases as suggestions and accepts full IDs. A listed model does not guarantee availability in every Copilot client or account.
 
 Activating the engineering skill adds a standing request for delegation in Agentic mode to the installer-managed instructions. Update the active selection to refresh an existing managed block. The engineering skill requests a Simple or Agentic mode choice for every new software edit before editing or delegating. Simple means direct work; Agentic uses configured roles when delegation is permitted. Independent review and testing remain separate choices, each disabled unless selected. These are natural-language instructions and cannot override higher-priority session rules or guarantee client behavior.
 
@@ -102,7 +103,7 @@ The GUI shows the planned global setup command and distinguishes an existing Cod
 
 ## Platform notes
 
-The GUIs use Python's standard-library Tkinter and work on Windows, macOS, and Linux when Tk support is available. Run scripts directly with Python; they locate repository content relative to their own files. If no graphical display or Tk is available, the skill installer has terminal instructions above and agent templates can be edited manually. No credentials are needed for local installation. Codex is needed only for the optional model refresh.
+The GUIs use Python's standard-library Tkinter and work on Windows, macOS, and Linux when Tk support is available. Run scripts directly with Python; they locate repository content relative to their own files. If no graphical display or Tk is available, the skill installer has terminal instructions above and agent templates can be edited manually. No credentials are needed for local installation. Model refresh has the optional client-specific requirements described above.
 
 ## License and attribution
 

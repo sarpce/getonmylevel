@@ -31,17 +31,17 @@ class InstructionWriteError(OSError):
 
 
 def _instruction_roots(scope: str, repo_root: Path | None, client: str = "codex") -> list[tuple[str, Path]]:
-    if client not in ("codex", "claude"):
+    if client not in ("codex", "claude", "copilot"):
         raise ValueError(f"Unknown client: {client}")
     roots: list[tuple[str, Path]] = []
     if scope in ("user", "both"):
-        config = os.environ.get("CLAUDE_CONFIG_DIR") if client == "claude" else os.environ.get("CODEX_HOME")
-        default = ".claude" if client == "claude" else ".codex"
+        config = os.environ.get("CLAUDE_CONFIG_DIR") if client == "claude" else os.environ.get("CODEX_HOME") if client == "codex" else None
+        default = {"claude": ".claude", "codex": ".codex", "copilot": ".copilot"}[client]
         roots.append(("user", Path(config).expanduser() if config else Path.home() / default))
     if scope in ("repo", "both"):
         if repo_root is None or not repo_root.is_dir():
             raise ValueError("Choose an existing target repository for repository scope.")
-        roots.append(("repo", repo_root))
+        roots.append(("repo", repo_root / ".github" if client == "copilot" else repo_root))
     if scope not in ("user", "repo", "both"):
         raise ValueError(f"Unknown installation scope: {scope}")
     return roots
@@ -53,7 +53,7 @@ def _instruction_path(root: Path, client: str = "codex") -> Path:
     for candidate in (expanded_root, *expanded_root.parents):
         if common.is_link_or_reparse(candidate):
             raise ValueError(f"Refusing linked or reparse-point managed instruction root: {candidate}")
-    filenames = ("CLAUDE.md",) if client == "claude" else ("AGENTS.override.md", "AGENTS.md")
+    filenames = (("CLAUDE.md",) if client == "claude" else ("copilot-instructions.md",) if client == "copilot" else ("AGENTS.override.md", "AGENTS.md"))
     candidates = [root / name for name in filenames]
     for candidate in candidates:
         if common.is_link_or_reparse(candidate):
@@ -67,11 +67,11 @@ def _instruction_path(root: Path, client: str = "codex") -> Path:
 
 
 def _current_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
-    if client not in ("codex", "claude"):
+    if client not in ("codex", "claude", "copilot"):
         raise ValueError(f"Unknown client: {client}")
-    folder = ".claude" if client == "claude" else ".agents"
+    folder = {"claude": ".claude", "codex": ".agents", "copilot": ".github"}[client]
     if kind == "user":
-        user_root = os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude" if client == "claude" else "~/.agents"
+        user_root = (os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude") if client == "claude" else "~/.copilot" if client == "copilot" else "~/.agents"
         paths = [f"{user_root}/skills/{name}/SKILL.md" for name in names]
         location_note = ""
     else:
@@ -121,6 +121,9 @@ def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> 
     if {"getonmylevel-communication", "getonmylevel-engineering", "getonmylevel-good-software-engineering-practices"}.intersection(names):
         mode_gate = ("For every new request involving any software or code edit, including fixes, tests, configuration, documentation, and skill instructions, always prompt the user to choose Simple or Agentic mode before editing or delegating, regardless of size or any choice made for an earlier request. Read-only investigation may continue while the answer is pending. Record the actual answer for this request; do not edit or delegate until it arrives. Simple means working directly. Agentic mode uses only the installed getonmylevel agent roles configured for the active client: getonmylevel_designer and getonmylevel_implementer, plus getonmylevel_reviewer and getonmylevel_tester only when the user opts into those roles. Claude Code uses the corresponding hyphenated names. Set each spawned agent's type to its installed getonmylevel role. A task-specific spawn name or identifier may be chosen freely; it does not change the required agent type. If a required configured role is unavailable, explain which role is missing and ask the user how to proceed. Ask separately whether the user wants an independent reviewer and an independent tester; each is disabled unless selected. Wait for the actual answer to every choice before assigning roles or doing dependent work. A default, timeout, or elapsed time is not an answer. Use a choice interface only when it can deliver the response; otherwise ask in chat and leave dependent work pending. If Agentic mode is unavailable or disallowed, explain why and ask how to proceed instead of silently switching modes. Respect higher-priority instructions.")
         block = block.replace(END, mode_gate + newline + END)
+    if client == "copilot":
+        block = block.replace("Claude Code uses the corresponding hyphenated names.",
+                              "Claude Code and GitHub Copilot use the corresponding hyphenated names.")
     return _add_context_guidance(block, newline)
 
 
@@ -143,11 +146,11 @@ def _add_context_guidance(block: str, newline: str) -> str:
 
 
 def _previous_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
-    if client not in ("codex", "claude"):
+    if client not in ("codex", "claude", "copilot"):
         raise ValueError(f"Unknown client: {client}")
-    folder = ".claude" if client == "claude" else ".agents"
+    folder = {"claude": ".claude", "codex": ".agents", "copilot": ".github"}[client]
     if kind == "user":
-        user_root = os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude" if client == "claude" else "~/.agents"
+        user_root = (os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude") if client == "claude" else "~/.copilot" if client == "copilot" else "~/.agents"
         paths = [f"{user_root}/skills/{name}/SKILL.md" for name in names]
         location_note = ""
     else:
@@ -165,9 +168,9 @@ def _previous_block(names: list[str], kind: str, newline: str, client: str = "co
 
 def _legacy_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
     """Render the older legacy template for migration compatibility."""
-    folder = ".claude" if client == "claude" else ".agents"
+    folder = {"claude": ".claude", "codex": ".agents", "copilot": ".github"}[client]
     if kind == "user":
-        user_root = os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude" if client == "claude" else "~/.agents"
+        user_root = (os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude") if client == "claude" else "~/.copilot" if client == "copilot" else "~/.agents"
         paths = [f"{user_root}/skills/{name}/SKILL.md" for name in names]
         location_note = ""
     else:
@@ -193,8 +196,8 @@ def _parse_block(text: str, kind: str, newline: str, client: str = "codex") -> l
     end_after = finish + len(END)
     body = text[start:end_after]
     names: list[str] = []
-    folder = ".claude" if client == "claude" else ".agents"
-    user_root = os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude" if client == "claude" else "~/.agents"
+    folder = {"claude": ".claude", "codex": ".agents", "copilot": ".github"}[client]
+    user_root = (os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude") if client == "claude" else "~/.copilot" if client == "copilot" else "~/.agents"
     prefix = f"{user_root}/skills/" if kind == "user" else f"{folder}/skills/"
     suffix = "/SKILL.md`"
     for line in body.split(newline):
@@ -292,7 +295,7 @@ def plan_instruction_removals(scope: str, repo_root: Path | None, client: str = 
     for kind, root in _instruction_roots(scope, repo_root, client):
         # This validates the managed root and both instruction paths for links.
         _instruction_path(root, client)
-        filenames = ("CLAUDE.md",) if client == "claude" else ("AGENTS.override.md", "AGENTS.md")
+        filenames = (("CLAUDE.md",) if client == "claude" else ("copilot-instructions.md",) if client == "copilot" else ("AGENTS.override.md", "AGENTS.md"))
         for path in (root / name for name in filenames):
             if common.is_link_or_reparse(path):
                 raise ValueError(f"Refusing linked or reparse-point instruction file: {path}")
@@ -313,7 +316,7 @@ def _write_instruction_plans(plans: list[InstructionUpdate], *, allow_hidden: bo
         try:
             if allow_hidden:
                 _instruction_path(plan.path.parent, client)
-                allowed = ("CLAUDE.md",) if client == "claude" else ("AGENTS.md", "AGENTS.override.md")
+                allowed = (("CLAUDE.md",) if client == "claude" else ("copilot-instructions.md",) if client == "copilot" else ("AGENTS.md", "AGENTS.override.md"))
                 if plan.path.name not in allowed:
                     raise OSError(f"Not a recognized instruction file: {plan.path}")
             elif _instruction_path(plan.path.parent, client) != plan.path:
@@ -336,7 +339,7 @@ def _write_instruction_plans(plans: list[InstructionUpdate], *, allow_hidden: bo
                     os.chmod(temp_path, mode)
                 if allow_hidden:
                     _instruction_path(plan.path.parent, client)
-                    allowed = ("CLAUDE.md",) if client == "claude" else ("AGENTS.md", "AGENTS.override.md")
+                    allowed = (("CLAUDE.md",) if client == "claude" else ("copilot-instructions.md",) if client == "copilot" else ("AGENTS.md", "AGENTS.override.md"))
                     if plan.path.name not in allowed:
                         raise OSError(f"Not a recognized instruction file: {plan.path}")
                 elif _instruction_path(plan.path.parent, client) != plan.path:
@@ -374,7 +377,7 @@ def plan_selected_removals(scope: str, repo_root: Path | None, names: list[str],
     plans = []
     for kind, root in _instruction_roots(scope, repo_root, client):
         _instruction_path(root, client)
-        filenames = ("CLAUDE.md",) if client == "claude" else ("AGENTS.override.md", "AGENTS.md")
+        filenames = (("CLAUDE.md",) if client == "claude" else ("copilot-instructions.md",) if client == "copilot" else ("AGENTS.override.md", "AGENTS.md"))
         for path in (root / name for name in filenames):
             if not path.exists():
                 continue

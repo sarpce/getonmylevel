@@ -71,7 +71,7 @@ class CodeGraphInstallTests(unittest.TestCase):
         installer.codegraph_check.configure.assert_called_with(state="normal")
 
     def test_explicit_codegraph_plan_targets_each_client(self):
-        for client in ("codex", "claude"):
+        for client in ("codex", "claude", "copilot"):
             with self.subTest(client=client):
                 installer = install_gui.Installer.__new__(install_gui.Installer)
                 installer.client = self.Variable(client)
@@ -81,7 +81,14 @@ class CodeGraphInstallTests(unittest.TestCase):
                 with patch.object(codegraph_installer, "plan_install", return_value=plan) as planner:
                     self.assertIs(installer.selections()[-1], plan)
                 planner.assert_called_once_with(client)
-                self.assertIn(f"--target={client}", plan.commands[-1])
+                if client == "copilot":
+                    self.assertIn("--target=copilot-cli,copilot-vscode", plan.commands[-1])
+                else:
+                    self.assertIn(f"--target={client}", plan.commands[-1])
+
+    def test_copilot_codegraph_configuration_targets_cli_and_vscode_together(self):
+        self.assertEqual(codegraph_installer.install_args("copilot"),
+                         ("install", "--target=copilot-cli,copilot-vscode", "--location=global", "--yes"))
 
     def test_codegraph_only_preview_and_confirmation_describe_actual_actions(self):
         for client in ("codex", "claude"):

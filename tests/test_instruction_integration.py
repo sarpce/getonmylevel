@@ -42,6 +42,44 @@ class InstructionIntegrationTests(unittest.TestCase):
         self.assertEqual(repo.path, self.repo / "AGENTS.md")
         self.assertEqual([p.path for p in both], [user.path, repo.path])
 
+    def test_copilot_cli_and_vscode_use_shared_skill_and_instruction_locations(self):
+        home = self.root / "home"
+        home.mkdir()
+        repo_github = self.repo / ".github"
+        with mock.patch.object(Path, "home", return_value=home):
+            self.assertEqual(common.skill_roots("user", None, "copilot"), [home / ".copilot" / "skills"])
+            self.assertEqual(common.skill_roots("repo", self.repo, "copilot"), [repo_github / "skills"])
+            self.assertEqual(common.agent_roots("global", None, "copilot"), [home / ".copilot" / "agents"])
+            self.assertEqual(common.agent_roots("repo", self.repo, "copilot"), [repo_github / "agents"])
+            user_plan, = integration.plan_instruction_updates("user", None, SKILLS[:1], "copilot")
+            repo_plan, = integration.plan_instruction_updates("repo", self.repo, SKILLS[:1], "copilot")
+            self.assertEqual(user_plan.path, home / ".copilot" / "copilot-instructions.md")
+            self.assertEqual(repo_plan.path, repo_github / "copilot-instructions.md")
+            self.assertIn("~/.copilot/skills/", user_plan.proposed.decode())
+            self.assertIn(".github/skills/", repo_plan.proposed.decode())
+            (repo_github).mkdir()
+            repo_plan.path.write_text("Keep this.\n", encoding="utf-8")
+            update, = integration.plan_instruction_updates("repo", self.repo, SKILLS[:1], "copilot")
+            integration.write_instruction_updates([update], "copilot")
+            self.assertTrue(update.path.read_text(encoding="utf-8").startswith("Keep this.\n"))
+            removal, = integration.plan_instruction_removals("repo", self.repo, "copilot")
+            integration.write_instruction_removals([removal], "copilot")
+            self.assertEqual(update.path.read_text(encoding="utf-8"), "Keep this.\n")
+
+    def test_copilot_agent_profiles_are_managed_markdown_and_refuse_edits(self):
+        expected = agents_gui.claude_expected("reviewer", agents_gui.load_templates()["reviewer"])
+        self.assertEqual(agents_gui.agent_filename("reviewer", "copilot"), "getonmylevel-reviewer.agent.md")
+        rendered = agents_gui.render_copilot_agent(expected, "claude-sonnet-4")
+        self.assertIn("model: \"claude-sonnet-4\"", rendered)
+        self.assertNotIn("effort:", rendered)
+        path = self.root / "reviewer.agent.md"
+        path.write_text(rendered, encoding="utf-8")
+        self.assertEqual(agents_gui.parse_copilot_managed_file(path, expected), ("claude-sonnet-4", ""))
+        first_instruction = expected["developer_instructions"].splitlines()[0]
+        path.write_text(rendered.replace(first_instruction, "Changed instruction body"), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "edited outside model settings"):
+            agents_gui.parse_copilot_managed_file(path, expected)
+
     def test_exact_selection_and_no_embedded_policy(self):
         design, engineering = "getonmylevel-design", "getonmylevel-engineering"
         for client in ("codex", "claude"):

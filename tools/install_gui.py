@@ -53,7 +53,7 @@ class Installer:
         client_row.pack(fill="x", pady=(0, 8))
         ttk.Label(client_row, text="Client:").pack(side="left")
         self.client_buttons = []
-        for label, value in (("Codex", "codex"), ("Claude Code", "claude")):
+        for label, value in (("Codex", "codex"), ("Claude Code", "claude"), ("GitHub Copilot", "copilot")):
             button = ttk.Radiobutton(client_row, text=label, value=value, variable=self.client,
                                      command=self.client_changed)
             button.pack(side="left", padx=6)
@@ -99,7 +99,7 @@ class Installer:
         codegraph_card = ttk.LabelFrame(outer, text="Recommended tool", style="Card.TLabelframe")
         codegraph_card.pack(fill="x", pady=(12, 0))
         self.codegraph_selected = tk.BooleanVar(value=False)
-        self.codegraph_by_client = {"codex": False, "claude": False}
+        self.codegraph_by_client = {"codex": False, "claude": False, "copilot": False}
         codegraph_row = ttk.Frame(codegraph_card, style="Card.TFrame")
         codegraph_row.pack(fill="x")
         self.codegraph_marker = ttk.Label(codegraph_row, text="○", style="CardMarker.TLabel", width=2, anchor="center")
@@ -240,12 +240,16 @@ class Installer:
     def client_changed(self) -> None:
         self.load_activation()
         claude = self.client.get() == "claude"
+        copilot = self.client.get() == "copilot"
         self.codegraph_selected.set(self.codegraph_by_client[self.client.get()])
         self.codegraph_check.configure(state="normal")
+        description = getattr(self, "codegraph_description", None)
+        if description is not None:
+            description.configure(text="Optional: configure CodeGraph for Copilot CLI and VS Code globally after confirmation." if copilot else "Optional: install CodeGraph if needed and configure the selected client globally after confirmation.")
         for check in self.suggested_checks:
-            check.configure(state="disabled" if claude else "normal")
-        self.suggested_button.configure(state="disabled" if claude else "normal")
-        self.suggested_refresh_button.configure(state="disabled" if claude else "normal")
+            check.configure(state="disabled" if claude or copilot else "normal")
+        self.suggested_button.configure(state="disabled" if claude or copilot else "normal")
+        self.suggested_refresh_button.configure(state="disabled" if claude or copilot else "normal")
         self.refresh_preview()
 
     def close(self) -> None:
@@ -586,7 +590,7 @@ class Installer:
             if any(operation.is_update for operation in copies):
                 confirmation += "\n\nUpdates replace selected directories and preserve their previous contents in backups."
             client = self.selected_client()
-            client_name = "Claude Code" if client == "claude" else "Codex"
+            client_name = {"claude": "Claude Code", "copilot": "GitHub Copilot", "codex": "Codex"}[client]
 
             if codegraph_plan:
                 confirmation += (f"\n\nCodeGraph is an optional user-wide tool. It may download packages and will configure {client_name} globally, including its MCP configuration and managed instructions. "
@@ -654,11 +658,12 @@ class Installer:
 
     def finish_install_worker(self) -> None:
         self.install_busy = False
-        for widget in (self.skill_button, self.remove_button, self.remove_skills_button, self.close_button, self.suggested_button, self.codegraph_check, self.activation_button, *self.client_buttons, *self.skill_checks):
+        for widget in (self.skill_button, self.remove_button, self.remove_skills_button, self.close_button, self.suggested_button, self.activation_button, *self.client_buttons, *self.skill_checks):
             widget.configure(state="normal")
-        claude = self.client.get() == "claude"
-        self.suggested_button.configure(state="disabled" if claude else "normal")
-        self.suggested_refresh_button.configure(state="disabled" if claude else "normal")
+        client = self.client.get()
+        self.codegraph_check.configure(state="normal")
+        self.suggested_button.configure(state="disabled" if client in ("claude", "copilot") else "normal")
+        self.suggested_refresh_button.configure(state="disabled" if client in ("claude", "copilot") else "normal")
 
     def poll_install_result(self) -> None:
         try:

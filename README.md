@@ -1,26 +1,14 @@
 # getonmylevel
 
-**Practical skills and optional agent roles for Codex, Claude Code, and GitHub Copilot CLI/VS Code.**
+**A set of practical instructions and optional agent roles for Codex, Claude Code, and GitHub Copilot CLI and VS Code.** Install only the skills you want, choose whether the client should read them by default, and add role templates when your client supports them.
 
-Seven skills for communication, context, engineering, design, software practices, skill discovery, and focused solutions. Choose what you need.
+The seven skills cover communication, project context, software engineering, interface design, skill discovery, and focused solutions. The optional designer, implementer, reviewer, and tester roles provide separate agent profiles for supported clients. These are instructions and templates: client behavior, available tools, and higher-priority instructions determine what can run.
 
-## Skills
+## Get started
 
-| Skill | Purpose |
-| --- | --- |
-| [Communication](skills/getonmylevel-communication/SKILL.md) | Clear, concise answers. |
-| [Context](skills/getonmylevel-context/SKILL.md) | Find relevant project context efficiently. |
-| [Engineering](skills/getonmylevel-engineering/SKILL.md) | Require a Simple or Agentic mode choice for software edits. |
-| [Design](skills/getonmylevel-design/SKILL.md) | Design deliberate, usable interfaces. |
-| [Good software engineering practices](skills/getonmylevel-good-software-engineering-practices/SKILL.md) | Keep software changes correct, secure, and maintainable. |
-| [Skill discovery](skills/getonmylevel-skill-discovery/SKILL.md) | Find useful available skills for each task. |
-| [Focused solutions](skills/getonmylevel-simplicity/SKILL.md) | Solve the complete task with the simplest maintainable change. |
+### GUI
 
-Optional **designer, implementer, reviewer, and tester** templates provide roles for Codex, Claude Code, and GitHub Copilot. Skills are instructions, not magic switches: actual behavior depends on client support, available tools, and higher-priority instructions.
-
-## Install
-
-To clone and run the GUI, use Git and Python 3.11+ with Tkinter and a graphical display. Choose Codex, Claude Code, or GitHub Copilot for client-native discovery; see [installation prerequisites](INSTALL.md#prerequisites) for optional tools.
+Requirements: Git, Python 3.11 or newer, Tkinter, and a graphical display. The setup tools use only Python's standard library.
 
 ```sh
 git clone https://github.com/sarpce/getonmylevel.git
@@ -28,47 +16,84 @@ cd getonmylevel
 python tools/install_gui.py
 ```
 
-1. In **Skills & installation**, choose **Codex**, **Claude Code**, or **GitHub Copilot**, then select skills and a scope. For repository scope, choose an existing repository. CodeGraph is an independent optional selection and can be installed on its own.
-2. Review the preview and confirm. Selected skills are copied from this checkout. Use **Active by default** separately to select and apply the skills the client should read when relevant; the preview shows any missing files required for activation.
-3. In **Agents**, optionally choose the client, roles, scope, and per-role model settings. Review and confirm those changes separately.
-4. Start a new conversation if changed instructions are not picked up. Restart the selected client if new skills or the CodeGraph MCP server are not discovered.
+Choose a client, select skills and a scope, then review and confirm. Choose an existing repository for repository scope. Skill files come from the checkout you cloned. To control default use, open **Active by default**, select the skills, and review and confirm that change separately. The optional **Agents** tab configures role profiles in a separate operation.
 
-Already have a skill installed? GUI updates it and keeps the old directory in a `getonmylevel-backups` folder beside the skills directory. A failed multi-skill operation can leave earlier changes in place; read the result. To open the same app through the agent entry point, run `python tools/agents_gui.py`.
+### Headless
 
-For headless or automated setup, install all bundled skills with:
+Requirements: Git and Python 3.11 or newer. No Tkinter or graphical display is needed.
 
 ```sh
+git clone https://github.com/sarpce/getonmylevel.git
+cd getonmylevel
 python tools/install.py install --client codex --scope user
 ```
 
-Use `--client claude` for Claude Code or `--client copilot` for GitHub Copilot CLI and VS Code, `--dry-run` to preview, and `update` or `remove` for subsequent changes. See [scriptable installation](INSTALL.md#scriptable-installation) for scope and skill selection. Python 3.11+ is required.
+This installs the seven bundled skills for Codex. Use `--client claude` or `--client copilot` for the other supported clients. Installation does not activate skills. See [scriptable installation](INSTALL.md#scriptable-installation) for selection, scope, updates, removal, and activation.
 
-The separate [`tools/setup.py`](INSTALL.md#headless-setup-operations) command manages optional agent roles, global CodeGraph setup, and supported suggested integrations without Tkinter or a display. It provides dry runs and explicit `--yes` confirmation gates for global configuration, third-party installation, and suggested integration removal.
+## Install, then activate
 
-## Use skills and agents
+Installing copies skill files to the selected client and scope. **Active by default** is a separate choice: it updates a managed section of the client's instructions to ask the client to read selected installed skills when relevant. The GUI provides a separate checklist; the CLI uses `activate`. Unchecking a skill from that list leaves its files available for explicit invocation. Activation is a natural-language preference and remains subject to client behavior and instruction precedence.
 
-The Active by default checklist controls which installed skills the selected client is asked to read when relevant. You can also name a skill explicitly, for example `$getonmylevel-engineering`, `$getonmylevel-design`, or `$getonmylevel-simplicity`. Your instructions and higher-priority rules still apply.
+For example, to activate one skill for Codex:
 
-The focused-solutions skill adapts ideas from Ponytail under its MIT license. It omits lite, full, and ultra levels: the core workflow is the useful default, while asking users to choose a level or automatically challenging their request would add friction and could conflict with explicit direction. See [attribution](ATTRIBUTION.md).
+```sh
+python tools/install.py activate --client codex --scope user --skills getonmylevel-context
+```
 
-When communication, engineering, or good software engineering practices is active, every new request involving a software edit requires a fresh choice between Simple and Agentic modes before editing or delegating, including small fixes and documentation changes. Read-only investigation may continue while the answer is pending. Simple means working directly; Agentic uses agents when delegation is permitted. In Agentic mode, independent review and testing are separate choices, each disabled unless selected. Activating the engineering skill also adds a standing request for delegation in Agentic mode to the installer-managed instructions. These are natural-language instructions: the project cannot intercept client tool calls. It cannot guarantee that a choice was presented or recorded. Existing installations receive updated instructions when the selected skills are applied or updated. If Agentic mode is unavailable, explain why and ask the user how to proceed. Higher-priority session instructions still apply.
+`activate` replaces the active selection for the chosen scope, so include every skill you want active in that command.
 
-The Agents tab can also copy an optional On/Off/Ask session preference block. It does not write that block to a file; merge it into your instructions yourself if wanted. See [session selector](optional/global-session-selector.md) for its scope.
+To clear the default-use selection while keeping installed files:
 
-## Client support and paths
+```sh
+python tools/install.py activate --client codex --scope user --skills none
+```
 
-The GUI and headless commands write client-specific skills, instructions, optional agent files, and supported integrations. The [client capabilities and paths table](INSTALL.md#client-capabilities-and-paths) lists destinations, environment overrides, and scope behavior. CodeGraph supports Codex, Claude Code, and both GitHub Copilot CLI and VS Code targets together.
+You can also ask for a skill explicitly, such as `$getonmylevel-engineering` or `$getonmylevel-simplicity`.
 
-## Extra tools
+## Simple and Agentic choices
 
-**CodeGraph** is an independently selectable recommendation for Codex, Claude Code, and GitHub Copilot CLI/VS Code. Selecting the context skill does not install it or require Node.js or npm. When explicitly selected, CodeGraph is installed if missing (requiring Node.js and npm) and configured globally for the chosen client regardless of skill scope. Setup may download packages and change that client's MCP configuration and managed instructions. It does not initialize or index any project; that is a separate choice. When managed instructions are active, the client is instructed to use an existing index for repository context and offer indexing when a project has none. Client behavior remains subject to instruction precedence and tool availability.
+When the communication, engineering, or good software engineering practices skill is active, each new request involving a software edit calls for a fresh choice between **Simple** (work directly) and **Agentic** (use agents when delegation is permitted) before editing or delegating, including documentation changes. In Agentic mode, independent reviewer and tester choices are separate; each is off unless selected. Read-only investigation can continue while the mode choice is pending. If Agentic mode is unavailable, explain why and ask how to proceed.
 
-The GUI and headless CLI offer optional [RTK](https://github.com/rtk-ai/rtk), [Last 30 Days](https://github.com/mvanhorn/last30days-skill), [CLI-Anything](https://github.com/HKUDS/CLI-Anything), [Impeccable](https://github.com/pbakaus/impeccable), [UI UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill), and [Anti UI Slop](https://github.com/uizze/uizze). Last 30 Days, Impeccable, UI UX Pro Max, and Anti UI Slop can be copied for Codex or Claude Code. CLI-Anything's Codex skill can be installed automatically; for Claude Code its selected revision supplies a marketplace plugin managed through Claude Code's `/plugin` interface. RTK remains manual. Impeccable, UI UX Pro Max, and Anti UI Slop are copied without running installer code or setting up optional hooks. Existing copies are not silently updated. RTK automatic installation is disabled because package-manager commands select moving versions. Maintainers update pins in the installer modules; see [INSTALL.md](INSTALL.md) for paths, pinning, and effects.
+These skills express instructions in natural language. They cannot intercept client tools or guarantee a choice was presented, and they do not override higher-priority session rules. Applying or updating the active skills refreshes the managed instruction block. The engineering skill also asks for delegation in Agentic mode; actual delegation depends on client and session support.
 
-## More details
+## Skills and roles
 
-[INSTALL.md](INSTALL.md) has detailed destinations, update and removal behavior, optional tool prerequisites, and scriptable setup operations for Codex, Claude Code, and GitHub Copilot without Tkinter or a display. The existing skill installer continues to manage bundled skills and default-use instructions.
+| Skill | What it helps with |
+| --- | --- |
+| [Communication](skills/getonmylevel-communication/SKILL.md) | Clear, concise answers with necessary context. |
+| [Context](skills/getonmylevel-context/SKILL.md) | Find relevant project information and navigate code. |
+| [Engineering](skills/getonmylevel-engineering/SKILL.md) | Choose Simple or Agentic mode for each software edit. |
+| [Design](skills/getonmylevel-design/SKILL.md) | Design and review usable interfaces. |
+| [Good software engineering practices](skills/getonmylevel-good-software-engineering-practices/SKILL.md) | Make software changes carefully and maintainably. |
+| [Skill discovery](skills/getonmylevel-skill-discovery/SKILL.md) | Find relevant available skills for a task. |
+| [Focused solutions](skills/getonmylevel-simplicity/SKILL.md) | Complete the requested work with a simple maintainable approach. |
+
+Optional **designer**, **implementer**, **reviewer**, and **tester** templates configure roles independently of the skills. See [agent roles](INSTALL.md#optional-agent-roles) for client formats, model settings, and setup.
+
+## Supported clients
+
+| Capability | Codex | Claude Code | GitHub Copilot CLI and VS Code |
+| --- | --- | --- | --- |
+| Bundled skills and managed instructions | Yes | Yes | Yes |
+| Optional role profiles | TOML | Markdown subagents | `.agent.md` profiles |
+| Role model settings | Model and effort | Model and effort | Model only; no reasoning effort |
+| CodeGraph setup | Global Codex configuration | Global Claude Code configuration | Configures CLI and VS Code together |
+| Suggested integrations | Skills and tools; RTK manual | Four skill copies; CLI-Anything plugin and RTK manual | Not available |
+
+See [client capabilities and paths](INSTALL.md#client-capabilities-and-paths) for destinations and scope behavior. All three support bundled skills and optional roles; integrations differ by client as shown above.
+
+## Optional integrations
+
+CodeGraph is an independent, optional global setup for all supported clients. It can provide code navigation through an MCP server; it does not initialize or index a project. Selecting the context skill does not install CodeGraph. Setup may download npm packages and change the selected client's MCP configuration and managed instructions; Node.js and npm are needed if CodeGraph must be installed.
+
+Suggested integrations include Last 30 Days, CLI-Anything, Impeccable, UI UX Pro Max, Anti UI Slop, and RTK. Four skills can be copied for Codex and Claude Code. CLI-Anything's Codex skill uses an upstream installer; Claude uses its marketplace plugin. RTK installation is manual, and suggested integration actions are unavailable for Copilot. Review the [integration details](INSTALL.md#suggested-skillsets-and-tools) for prerequisites, pinned revisions, licenses, and installation effects.
+
+## More information
+
+[INSTALL.md](INSTALL.md) covers prerequisites, destinations, activation, update and removal, troubleshooting, headless setup, and integrations. [ATTRIBUTION.md](ATTRIBUTION.md) describes the focused-solutions adaptation and third-party attribution.
+
+The optional [session selector](optional/global-session-selector.md) provides an On/Off/Ask preference block for five skills. The GUI can copy the block; it does not write it to a file. Merge it into your instructions manually if you want to use it.
 
 ## License
 
-Source-available under a custom license. Personal, noncommercial use and private modifications are permitted. Commercial use and public distribution of modified or derivative work require prior written permission. See [LICENSE](LICENSE) and [ATTRIBUTION.md](ATTRIBUTION.md).
+Source-available under a custom license. Personal, noncommercial use and private modifications are permitted. Commercial use and public distribution of modified or derivative work require prior written permission. This is not an open-source license. See [LICENSE](LICENSE) and [ATTRIBUTION.md](ATTRIBUTION.md).

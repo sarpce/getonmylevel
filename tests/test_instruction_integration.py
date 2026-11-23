@@ -338,6 +338,163 @@ class InstructionIntegrationTests(unittest.TestCase):
         self.assertEqual(caught.exception.written, (first.path,))
         self.assertEqual(caught.exception.path, second.path)
 
+    def test_skill_status_distinguishes_installed_and_default_active_per_scope(self):
+        with mock.patch.object(Path, "home", return_value=self.root / "home"):
+            user_root = common.skill_roots("user", None, "codex")[0]
+            repo_root = common.skill_roots("repo", self.repo, "codex")[0]
+            (user_root / SKILLS[0]).mkdir(parents=True)
+            (user_root / SKILLS[0] / "SKILL.md").write_text("skill", encoding="utf-8")
+            (repo_root / SKILLS[0]).mkdir(parents=True)
+            (repo_root / SKILLS[0] / "SKILL.md").write_text("skill", encoding="utf-8")
+            integration.write_instruction_updates(integration.plan_instruction_updates("user", None, [SKILLS[0]]))
+            result = install_gui.skill_operations.skill_status("both", self.repo, "codex", [SKILLS[0], SKILLS[1]])
+        self.assertEqual(result["user"]["skills"][SKILLS[0]]["status"], "Installed and active by default")
+        self.assertEqual(result["repo"]["skills"][SKILLS[0]]["status"], "Installed and available on request")
+        self.assertEqual(result["user"]["skills"][SKILLS[1]]["status"], "Not installed")
+        self.assertEqual(result["repo"]["skills"][SKILLS[1]]["status"], "Not installed")
+
+    def test_skill_status_reports_orphan_activation_and_scope_local_errors(self):
+        with mock.patch.object(Path, "home", return_value=self.root / "home"):
+            integration.write_instruction_updates(integration.plan_instruction_updates("user", None, [SKILLS[0]]))
+            result = install_gui.skill_operations.skill_status("both", self.repo / "missing", "codex", [SKILLS[0]])
+        self.assertEqual(result["user"]["skills"][SKILLS[0]]["status"], "Not installed")
+        self.assertIn("file is missing", result["user"]["skills"][SKILLS[0]]["warning"])
+        self.assertIsNotNone(result["repo"]["error"])
+
+    def test_skill_status_reports_malformed_managed_instructions_without_hiding_other_scope(self):
+        (self.codex / "AGENTS.md").write_text(
+            f"{integration.BEGIN}\nmanual edit\n{integration.END}", encoding="utf-8")
+        with mock.patch.object(Path, "home", return_value=self.root / "home"):
+            result = install_gui.skill_operations.skill_status("both", self.repo, "codex", [SKILLS[0]])
+        self.assertIn("malformed", result["user"]["error"])
+        self.assertIsNone(result["repo"]["error"])
+        self.assertEqual(result["repo"]["skills"][SKILLS[0]]["status"], "Not installed")
+
+    def test_skill_status_uses_each_clients_user_skill_root(self):
+        home = self.root / "home"
+        claude_home = self.root / "claude-config"
+        with mock.patch.object(Path, "home", return_value=home), mock.patch.dict(os.environ, {
+                "CLAUDE_CONFIG_DIR": str(claude_home), "CODEX_HOME": str(self.codex)}):
+            for client in ("codex", "claude", "copilot"):
+                with self.subTest(client=client):
+                    root = common.skill_roots("user", None, client)[0]
+                    skill_dir = root / SKILLS[0]
+                    skill_dir.mkdir(parents=True)
+                    (skill_dir / "SKILL.md").write_text("skill", encoding="utf-8")
+                    plans = integration.plan_instruction_updates("user", None, [SKILLS[0]], client)
+                    integration.write_instruction_updates(plans, client)
+                    result = install_gui.skill_operations.skill_status("user", None, client, [SKILLS[0]])
+                    self.assertEqual(result["user"]["skills"][SKILLS[0]]["status"], "Installed and active by default")
+
+    def test_skill_status_reports_inaccessible_skill_files_instead_of_not_installed(self):
+        with mock.patch.object(Path, "home", return_value=self.root / "home"):
+            skill_file = common.skill_roots("user", None, "codex")[0] / SKILLS[0] / "SKILL.md"
+            skill_file.parent.mkdir(parents=True)
+            skill_file.write_text("skill", encoding="utf-8")
+            original_stat = Path.stat
+
+            def inaccessible(path, *args, **kwargs):
+                if path == skill_file:
+                    raise PermissionError("access denied")
+                return original_stat(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "stat", inaccessible):
+                result = install_gui.skill_operations.skill_status("user", None, "codex", [SKILLS[0]])
+        self.assertEqual(result["user"]["skills"], {})
+        self.assertIn("access denied", result["user"]["error"])
+
+    def test_inaccessible_codex_override_does_not_look_absent_or_fall_back(self):
+        integration.write_instruction_updates(integration.plan_instruction_updates("user", None, [SKILLS[0]]))
+        override = self.codex / "AGENTS.override.md"
+        original_stat = Path.stat
+
+        def inaccessible(path, *args, **kwargs):
+            if path == override:
+                raise PermissionError("override access denied")
+            return original_stat(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "stat", inaccessible):
+            status = install_gui.skill_operations.skill_status("user", None, "codex", [SKILLS[0]])
+            with self.assertRaisesRegex(PermissionError, "override access denied"):
+                integration.plan_instruction_updates("user", None, [SKILLS[0]])
+        self.assertIn("override access denied", status["user"]["error"])
+
+    def test_unavailable_repository_permission_is_not_reported_as_missing(self):
+        original_stat = Path.stat
+
+        def inaccessible(path, *args, **kwargs):
+            if path == self.repo:
+                raise PermissionError("repository access denied")
+            return original_stat(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "home", return_value=self.root / "home"), \
+             mock.patch.object(Path, "stat", inaccessible):
+            status = install_gui.skill_operations.skill_status("both", self.repo, "codex", [SKILLS[0]])
+        self.assertIsNone(status["user"]["error"])
+        self.assertIn("repository access denied", status["repo"]["error"])
+
+    def test_deactivating_skill_keeps_its_installed_files_available_on_request(self):
+        with mock.patch.object(Path, "home", return_value=self.root / "home"):
+            root = common.skill_roots("user", None, "codex")[0]
+            skill_dir = root / SKILLS[0]
+            skill_dir.mkdir(parents=True)
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text("installed content", encoding="utf-8")
+            activation = integration.plan_instruction_updates("user", None, [SKILLS[0]])
+            integration.write_instruction_updates(activation)
+            deactivation = integration.plan_instruction_updates("user", None, [])
+            integration.write_instruction_updates(deactivation)
+            result = install_gui.skill_operations.skill_status("user", None, "codex", [SKILLS[0]])
+        self.assertEqual(skill_file.read_text(encoding="utf-8"), "installed content")
+        self.assertEqual(result["user"]["skills"][SKILLS[0]]["status"], "Installed and available on request")
+
+    def test_gui_shows_separate_both_scope_status_and_refreshes_after_activation(self):
+        class Variable:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class Label:
+            def __init__(self):
+                self.text = ""
+
+            def configure(self, **kwargs):
+                self.text = kwargs["text"]
+
+        installer = install_gui.Installer.__new__(install_gui.Installer)
+        installer.repo_path = Variable(str(self.repo))
+        installer.scope = Variable("both")
+        installer.client = Variable("codex")
+        user = {"skills": {SKILLS[0]: {"status": "Installed and active by default", "warning": None}}, "error": None}
+        repository = {"skills": {}, "error": "managed instruction file is malformed"}
+        label = Label()
+        installer.skill_card_status = {SKILLS[0]: label}
+        with mock.patch.object(install_gui.skill_operations, "skill_status", return_value={"user": user, "repo": repository}):
+            installer.refresh_skill_status()
+        self.assertIn("User-wide: Installed and active by default", label.text)
+        self.assertIn("Repository: Status unavailable — managed instruction file is malformed", label.text)
+
+        installer.scope = Variable("user")
+        installer.repo_path = Variable("")
+        installer.activation_plan = mock.Mock(return_value=({"user": [SKILLS[0]]}, [], [
+            integration.InstructionUpdate(self.codex / "AGENTS.md", None, b"managed", "Create")]))
+        installer.activation_cache = {("codex", "user", ""): {"user": []}}
+        installer.activation_key = ("codex", "user", "")
+        installer.load_activation = mock.Mock()
+        installer.refresh_skill_status = mock.Mock()
+        with mock.patch.object(install_gui.messagebox, "askyesno", return_value=True) as confirm, \
+             mock.patch.object(install_gui.messagebox, "showinfo") as completed, \
+             mock.patch.object(install_gui, "perform_install", return_value=(None, [self.codex / "AGENTS.md"])) as apply:
+            installer.apply_activation()
+        self.assertIn("activate getonmylevel-communication", confirm.call_args.args[1])
+        self.assertIn("Installed skill files remain available on request", confirm.call_args.args[1])
+        self.assertIn("Active by default now", completed.call_args.args[1])
+        self.assertIn(SKILLS[0], completed.call_args.args[1])
+        installer.refresh_skill_status.assert_called_once()
+        apply.assert_called_once()
+
     def test_gui_preview_and_confirmation_show_instruction_actions(self):
         class Variable:
             def __init__(self, value):
@@ -374,8 +531,9 @@ class InstructionIntegrationTests(unittest.TestCase):
              mock.patch.object(integration, "plan_instruction_updates", return_value=[instruction]):
             installer.refresh_preview()
         self.assertIn("Install: destination", installer.preview.value)
-        self.assertIn(f"Create: {instruction.path}", installer.preview.value)
-        self.assertIn("Required installation: destination", installer.preview.value)
+        self.assertIn(f"Create managed instructions: {instruction.path}", installer.preview.value)
+        self.assertIn("Required installation (available on request): destination", installer.preview.value)
+        self.assertIn("does not activate skills by default", installer.preview.value)
 
         installer.selections = mock.Mock(return_value=([SKILLS[0]], [], [operation], [instruction], None))
         with mock.patch.object(install_gui.messagebox, "askyesno", return_value=False) as confirm, \
@@ -384,6 +542,7 @@ class InstructionIntegrationTests(unittest.TestCase):
         confirmation = confirm.call_args.args[1]
         self.assertIn(str(instruction.path), confirmation)
         self.assertIn("Instructions (create)", confirmation)
+        self.assertIn("does not select them for default use", confirmation)
         perform.assert_not_called()
 
 

@@ -1,5 +1,6 @@
 ﻿"""Shared, headless operations for bundled skill installation."""
 from pathlib import Path
+import stat
 import tempfile
 import common
 import instruction_integration as instructions
@@ -13,6 +14,12 @@ def roots_for(scope, repo, client):
         if repo is None or not str(repo).strip():
             raise ValueError("Choose an existing target repository for repository scope.")
         repo = Path(repo).expanduser()
+        try:
+            repo_info = repo.stat()
+        except FileNotFoundError as exc:
+            raise ValueError(f"Target repository is unavailable: {repo}") from exc
+        if not stat.S_ISDIR(repo_info.st_mode):
+            raise ValueError(f"Target repository is not a directory: {repo}")
         if common.canonical(repo) == SOURCE_REPO:
             raise ValueError("The target repository must differ from this source checkout.")
     else:
@@ -25,6 +32,64 @@ def plan_install(names, scope, repo, client):
     copies = common.preflight_skill_copy(SOURCE_ROOT, names, roots)
     plans = []
     return roots, copies, plans
+
+
+def skill_status(scope, repo, client, names=None):
+    """Read installed files and managed activation independently per scope.
+
+    Errors stay attached to the affected scope so a broken repository path or
+    managed block cannot hide valid user-wide state in ``both`` mode.
+    """
+    names = tuple(names or common.SKILL_NAMES)
+    scopes = ("user", "repo") if scope == "both" else (scope,)
+    result = {}
+    for kind in scopes:
+        try:
+            target_repo, roots = roots_for(kind, repo, client)
+            root = roots[0]
+            active = instructions.active_skills(kind, target_repo, client)[kind]
+            per_skill = {}
+            for name in names:
+                path = root / name
+                if common.is_link_or_reparse(path):
+                    raise ValueError(f"Refusing linked or reparse-point skill path: {path}")
+                warning = None
+                try:
+                    path_info = path.lstat()
+                except FileNotFoundError:
+                    path_info = None
+                if path_info is None:
+                    installed = False
+                elif not stat.S_ISDIR(path_info.st_mode):
+                    installed = False
+                    warning = f"Skill destination is not a directory: {path}"
+                else:
+                    skill_path = path / "SKILL.md"
+                    if common.is_link_or_reparse(skill_path):
+                        raise ValueError(f"Refusing linked or reparse-point skill file: {skill_path}")
+                    try:
+                        skill_info = skill_path.stat()
+                    except FileNotFoundError:
+                        skill_info = None
+                    installed = skill_info is not None and stat.S_ISREG(skill_info.st_mode)
+                    if skill_info is not None and not installed:
+                        warning = f"Skill entry is not a regular file: {skill_path}"
+                    elif not installed:
+                        warning = f"Skill directory is missing SKILL.md: {path}"
+                enabled = name in active
+                per_skill[name] = {
+                    "installed": installed,
+                    "active": enabled,
+                    "status": ("Installed and active by default" if installed and enabled else
+                               "Installed and available on request" if installed else
+                               "Not installed"),
+                    "warning": (f"Managed instructions activate this skill, but its file is missing: {path / 'SKILL.md'}"
+                                if enabled and not installed else warning),
+                }
+            result[kind] = {"skills": per_skill, "error": None}
+        except (OSError, ValueError) as exc:
+            result[kind] = {"skills": {}, "error": str(exc)}
+    return result
 
 
 def perform_install(copies, plans, client="codex"):

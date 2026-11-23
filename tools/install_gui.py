@@ -70,6 +70,7 @@ class Installer:
         self.skill_card_markers = {}
         self.skill_card_checkbuttons = {}
         self.skill_card_descriptions = {}
+        self.skill_card_status = {}
         for name in common.SKILL_NAMES:
             title, description = SKILL_DESCRIPTIONS[name]
             card = tk.Frame(self.skills_grid, background="#FFFFFF", highlightthickness=1,
@@ -86,12 +87,16 @@ class Installer:
             detail = ttk.Label(body, text=description, style="CardMuted.TLabel", wraplength=260,
                                justify="left")
             detail.pack(anchor="w", fill="x", pady=(5, 0))
+            status = ttk.Label(body, text="", style="CardMuted.TLabel", wraplength=260,
+                               justify="left")
+            status.pack(anchor="w", fill="x", pady=(6, 0))
             self.skill_cards[name] = card
             self.skill_card_bodies[name] = body
             self.skill_card_title_rows[name] = title_row
             self.skill_card_markers[name] = marker
             self.skill_card_checkbuttons[name] = check
             self.skill_card_descriptions[name] = detail
+            self.skill_card_status[name] = status
             self.skill_checks.append(check)
             self.selected[name].trace_add("write", lambda *_args, key=name: self.update_skill_card(key))
         self.skills_grid.bind("<Configure>", self.reflow_skill_cards)
@@ -136,7 +141,7 @@ class Installer:
         self.activation_key = None
         self.activation_button = ttk.Button(self.activation_box, text="Apply active skills...", command=self.apply_activation)
         self.activation_button.pack(anchor="e")
-        self.repo_path.trace_add("write", lambda *_: self.load_activation())
+        self.repo_path.trace_add("write", lambda *_: (self.load_activation(), self.refresh_skill_status()))
 
         suggested_box = ttk.LabelFrame(outer, text="Suggested skillsets and tools", padding=8)
         suggested_box.pack(fill="x", pady=(10, 0))
@@ -204,7 +209,30 @@ class Installer:
         self.skill_card_markers[name].configure(text="✓" if selected else "○",
                                                 style="Selected.CardMarker.TLabel" if selected else "CardMarker.TLabel")
         self.skill_card_checkbuttons[name].configure(style="Selected.Card.TCheckbutton" if selected else "Card.TCheckbutton")
+        self.refresh_skill_status()
         self.refresh_preview()
+
+    def refresh_skill_status(self) -> None:
+        if not hasattr(self, "skill_card_status"):
+            return
+        repo = self.repo_path.get().strip()
+        repo = Path(repo).expanduser() if repo else None
+        status = skill_operations.skill_status(self.scope.get(), repo, self.selected_client())
+        for name, label in self.skill_card_status.items():
+            lines = []
+            for scope, title in (("user", "User-wide"), ("repo", "Repository")):
+                if scope not in status:
+                    continue
+                item = status[scope]
+                if item["error"]:
+                    lines.append(f"{title}: Status unavailable — {item['error']}")
+                    continue
+                state = item["skills"][name]
+                line = f"{title}: {state['status']}"
+                if state["warning"]:
+                    line += f" — {state['warning']}"
+                lines.append(line)
+            label.configure(text="\n".join(lines))
 
     def fit_page_copy(self, event) -> None:
         width = max(240, event.width - 36)
@@ -236,9 +264,11 @@ class Installer:
                       padx=(0 if index % columns == 0 else 6, 6 if index % columns < columns - 1 else 0),
                       pady=(0, 12))
             self.skill_card_descriptions[name].configure(wraplength=max(180, card_width - 36))
+            self.skill_card_status[name].configure(wraplength=max(180, card_width - 36))
 
     def client_changed(self) -> None:
         self.load_activation()
+        self.refresh_skill_status()
         claude = self.client.get() == "claude"
         copilot = self.client.get() == "copilot"
         self.codegraph_selected.set(self.codegraph_by_client[self.client.get()])
@@ -407,12 +437,14 @@ class Installer:
 
     def scope_changed(self) -> None:
         self.load_activation()
+        self.refresh_skill_status()
         self.refresh_preview()
 
     def browse_repo(self) -> None:
         chosen = filedialog.askdirectory(title="Choose an existing target repository")
         if chosen:
             self.repo_path.set(chosen)
+            self.refresh_skill_status()
             self.refresh_preview()
 
     def load_activation(self) -> None:
@@ -455,17 +487,31 @@ class Installer:
     def apply_activation(self) -> None:
         try:
             selections, copies, plans = self.activation_plan()
-            lines = [f"{scope}: {', '.join(names) or '(none)'}" for scope, names in selections.items()]
-            lines += [f"Required installation: {copy.destination}" for copy in copies]
-            lines += [f"{plan.action}: {plan.path}" for plan in plans]
-            if not messagebox.askyesno("Confirm active skills", "Apply these default skill selections?\n\n" + "\n".join(lines)):
+            lines = ["Apply managed default-use instructions. Installed skill files remain available on request, including skills that are unchecked here."]
+            current = instruction_integration.active_skills(self.scope.get(),
+                Path(self.repo_path.get()).expanduser() if self.scope.get() in ("repo", "both") else None,
+                self.selected_client())
+            for scope, names in selections.items():
+                added = sorted(set(names) - set(current.get(scope, [])))
+                removed = sorted(set(current.get(scope, [])) - set(names))
+                lines.append(f"{scope}: activate {', '.join(added) or '(none)'}; deactivate {', '.join(removed) or '(none)'}")
+            lines += [f"Install required skill files: {copy.destination}" for copy in copies]
+            lines += [f"{plan.action} managed instructions: {plan.path}" for plan in plans]
+            if not messagebox.askyesno("Confirm default skill use", "\n\n".join(lines)):
                 return
             _, written = perform_install(copies, plans, self.selected_client())
             self.activation_cache.pop(self.activation_key, None)
             self.activation_key = None
             self.load_activation()
-            messagebox.showinfo("Active skills updated", "Updated instruction files:\n" + ("\n".join(map(str, written)) or "None"))
+            self.refresh_skill_status()
+            selected_text = "\n".join(f"  {scope}: {', '.join(names) or '(none active by default)'}"
+                                        for scope, names in selections.items())
+            messagebox.showinfo("Default skill use updated", "Managed instructions updated:\n" + ("\n".join(map(str, written)) or "No file changes were needed") + "\n\nActive by default now:\n" + selected_text + "\n\nInstalled skill files remain available on request, including unchecked skills.")
         except (OSError, ValueError, RuntimeError) as exc:
+            self.activation_cache.clear()
+            self.activation_key = None
+            self.load_activation()
+            self.refresh_skill_status()
             self.show_install_error(exc)
 
     def selections(self):
@@ -494,12 +540,20 @@ class Installer:
             if not actions:
                 messagebox.showinfo("Nothing to remove", "No selected skills or instruction references were found.")
                 return
-            if not messagebox.askyesno("Confirm skill removal", "Remove selected skills and their instruction references? Skill directories are preserved in backups.\n\n" + "\n".join(actions)):
+            if not messagebox.askyesno("Confirm skill removal", "Remove selected skill files and deactivate their managed instruction references in the selected scope? Skill directories are preserved in backups.\n\n" + "\n".join(actions)):
                 return
             backups, written = skill_operations.perform_remove(paths, plans, self.selected_client())
+            self.activation_cache.clear()
+            self.activation_key = None
+            self.load_activation()
+            self.refresh_skill_status()
             self.refresh_preview()
-            messagebox.showinfo("Skills removed", "Backups:\n" + ("\n".join(backups) or "None") + "\n\nInstructions updated:\n" + ("\n".join(map(str, written)) or "None"))
+            messagebox.showinfo("Skills removed", "Selected skill files moved to backups:\n" + ("\n".join(backups) or "None") + "\n\nManaged default-use references removed from:\n" + ("\n".join(map(str, written)) or "No instruction files needed changes"))
         except (OSError, ValueError, RuntimeError) as exc:
+            self.activation_cache.clear()
+            self.activation_key = None
+            self.load_activation()
+            self.refresh_skill_status()
             messagebox.showerror("Removal stopped", str(exc))
 
     def remove_instructions(self) -> None:
@@ -519,9 +573,17 @@ class Installer:
             if not messagebox.askyesno("Confirm instruction removal", confirmation):
                 return
             written = instruction_integration.write_instruction_removals(plans, self.selected_client())
+            self.activation_cache.clear()
+            self.activation_key = None
+            self.load_activation()
+            self.refresh_skill_status()
             self.refresh_preview()
-            messagebox.showinfo("Instructions removed", "Removed managed instructions from:\n" + "\n".join(map(str, written)))
+            messagebox.showinfo("Instructions removed", "Removed managed instructions from:\n" + "\n".join(map(str, written)) + "\n\nInstalled skill files remain available on request.")
         except (OSError, ValueError) as exc:
+            self.activation_cache.clear()
+            self.activation_key = None
+            self.load_activation()
+            self.refresh_skill_status()
             details = str(exc)
             if isinstance(exc, instruction_integration.InstructionWriteError):
                 details += "\n\nThe instruction operation is not transactional."
@@ -546,16 +608,22 @@ class Installer:
             plan = common.preflight_skill_copy(SOURCE_ROOT, names, roots) if names else []
             lines = [f"Skills: {', '.join(names) if names else '(none selected)'}", "Actions:"]
             lines.extend(f"  {'Update' if operation.is_update else 'Install'}: {operation.destination}" for operation in plan)
+            if names:
+                lines.append("\nInstalling makes these files available on request. This install action does not activate skills by default.")
             if any(operation.is_update for operation in plan):
                 lines.append("\nUpdates replace the selected skill directory. Its previous contents are preserved in a backup.")
             if names:
                 lines.append("\nThe checked-out skill files are the versions this installer installs.")
             if getattr(self, "activation_vars", None):
                 selections, required, activation_plans = self.activation_plan()
-                lines.append("\nActive by default:")
-                lines.extend(f"  {scope}: {', '.join(selected) or '(none)'}" for scope, selected in selections.items())
-                lines.extend(f"  Required installation: {item.destination}" for item in required)
-                lines.extend(f"  {item.action}: {item.path}" for item in activation_plans)
+                lines.append("\nPending default-use instruction changes (use Apply active skills... to apply these; current saved status remains shown on each skill card):")
+                current = instruction_integration.active_skills(self.scope.get(), repo_root, client)
+                for scope, selected in selections.items():
+                    added = sorted(set(selected) - set(current.get(scope, [])))
+                    removed = sorted(set(current.get(scope, [])) - set(selected))
+                    lines.append(f"  {scope}: activate {', '.join(added) or '(none)'}; deactivate {', '.join(removed) or '(none)'}")
+                lines.extend(f"  Required installation (available on request): {item.destination}" for item in required)
+                lines.extend(f"  {item.action} managed instructions: {item.path}" for item in activation_plans)
             if wants_codegraph:
                 codegraph_plan = codegraph_installer.plan_install(self.selected_client())
                 client_name = "Claude Code" if self.selected_client() == "claude" else "Codex"
@@ -589,6 +657,8 @@ class Installer:
                 confirmation += "\n\n" + "\n".join(actions)
             if any(operation.is_update for operation in copies):
                 confirmation += "\n\nUpdates replace selected directories and preserve their previous contents in backups."
+            if names:
+                confirmation += "\n\nThis installs or updates skill files for explicit use. It does not select them for default use; use Active by default to change managed instructions."
             client = self.selected_client()
             client_name = {"claude": "Claude Code", "copilot": "GitHub Copilot", "codex": "Codex"}[client]
 
@@ -626,6 +696,8 @@ class Installer:
                     sections.append("Updated:\n" + "\n".join(result.updated))
                 if result.backups:
                     sections.append("Backups:\n" + "\n".join(result.backups))
+                if names:
+                    sections.append("Installed skill files are available on request. Default-use activation was not changed by this operation.")
                 if written:
                     sections.append("Instruction files updated:\n" + "\n".join(map(str, written)))
                 unchanged = [str(item.path) for item in instruction_plans if item.path not in written]
@@ -673,6 +745,10 @@ class Installer:
             return
         self.install_status.destroy()
         self.finish_install_worker()
+        self.activation_cache.clear()
+        self.activation_key = None
+        self.load_activation()
+        self.refresh_skill_status()
         if success:
             messagebox.showinfo("Installation complete", message)
         else:

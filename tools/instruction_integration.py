@@ -39,8 +39,14 @@ def _instruction_roots(scope: str, repo_root: Path | None, client: str = "codex"
         default = {"claude": ".claude", "codex": ".codex", "copilot": ".copilot"}[client]
         roots.append(("user", Path(config).expanduser() if config else Path.home() / default))
     if scope in ("repo", "both"):
-        if repo_root is None or not repo_root.is_dir():
+        if repo_root is None:
             raise ValueError("Choose an existing target repository for repository scope.")
+        repo_root = Path(repo_root).expanduser()
+        repo_info = _stat_optional(repo_root)
+        if repo_info is None:
+            raise ValueError(f"Target repository is unavailable: {repo_root}")
+        if not stat.S_ISDIR(repo_info.st_mode):
+            raise ValueError(f"Target repository is not a directory: {repo_root}")
         roots.append(("repo", repo_root / ".github" if client == "copilot" else repo_root))
     if scope not in ("user", "repo", "both"):
         raise ValueError(f"Unknown installation scope: {scope}")
@@ -58,12 +64,28 @@ def _instruction_path(root: Path, client: str = "codex") -> Path:
     for candidate in candidates:
         if common.is_link_or_reparse(candidate):
             raise ValueError(f"Refusing linked or reparse-point instruction file: {candidate}")
-        if candidate.exists():
-            if not candidate.is_file():
+        info = _stat_optional(candidate)
+        if info is not None:
+            if not stat.S_ISREG(info.st_mode):
                 raise ValueError(f"Instruction path is not a regular file: {candidate}")
-            if candidate.stat().st_size:
+            if info.st_size:
                 return candidate
     return candidates[-1]
+
+
+def _stat_optional(path: Path):
+    """Return stat data, treating only a missing path as absent."""
+    try:
+        return path.stat()
+    except FileNotFoundError:
+        return None
+
+
+def _read_optional(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
 
 
 def _current_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
@@ -249,7 +271,7 @@ def plan_instruction_updates(scope: str, repo_root: Path | None, names: list[str
     plans: list[InstructionUpdate] = []
     for kind, root in _instruction_roots(scope, repo_root, client):
         path = _instruction_path(root, client)
-        original = path.read_bytes() if path.exists() else None
+        original = _read_optional(path)
         proposed, action = _updated_bytes(original, kind, selected, client)
         plans.append(InstructionUpdate(path, original, proposed, action))
     return plans
@@ -259,7 +281,7 @@ def active_skills(scope: str, repo_root: Path | None, client: str = "codex") -> 
     result = {}
     for kind, root in _instruction_roots(scope, repo_root, client):
         path = _instruction_path(root, client)
-        raw = path.read_bytes() if path.exists() else b""
+        raw = _read_optional(path) or b""
         try:
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
@@ -299,9 +321,10 @@ def plan_instruction_removals(scope: str, repo_root: Path | None, client: str = 
         for path in (root / name for name in filenames):
             if common.is_link_or_reparse(path):
                 raise ValueError(f"Refusing linked or reparse-point instruction file: {path}")
-            if not path.exists():
+            info = _stat_optional(path)
+            if info is None:
                 continue
-            if not path.is_file():
+            if not stat.S_ISREG(info.st_mode):
                 raise ValueError(f"Instruction path is not a regular file: {path}")
             original = path.read_bytes()
             proposed = _removed_bytes(original, kind, client)
@@ -379,9 +402,10 @@ def plan_selected_removals(scope: str, repo_root: Path | None, names: list[str],
         _instruction_path(root, client)
         filenames = (("CLAUDE.md",) if client == "claude" else ("copilot-instructions.md",) if client == "copilot" else ("AGENTS.override.md", "AGENTS.md"))
         for path in (root / name for name in filenames):
-            if not path.exists():
+            info = _stat_optional(path)
+            if info is None:
                 continue
-            if common.is_link_or_reparse(path) or not path.is_file():
+            if common.is_link_or_reparse(path) or not stat.S_ISREG(info.st_mode):
                 raise ValueError(f"Invalid instruction file: {path}")
             original = path.read_bytes()
             bom = b"\xef\xbb\xbf" if original.startswith(b"\xef\xbb\xbf") else b""

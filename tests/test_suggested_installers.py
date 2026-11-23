@@ -139,8 +139,68 @@ class PinnedInstallerTests(unittest.TestCase):
             installer.refresh_suggested_status()
         self.assertIn("manual installation only", check.configure.call_args.kwargs["text"])
         self.assertEqual(check.configure.call_args.kwargs["state"], "disabled")
-        self.assertIn("package-manager versions move", detail.configure.call_args.kwargs["text"])
-        self.assertIn(installers.RTK_INSTALL_URL, detail.configure.call_args.kwargs["text"])
+        self.assertIn("Not detected on PATH", detail.configure.call_args.kwargs["text"])
+
+    def test_details_distinguish_detection_pin_and_unknown_existing_provenance(self):
+        for item in installers.SUGGESTED_ITEMS:
+            with self.subTest(item=item.id):
+                details = installers.integration_details(item.id, (Path("/detected/copy"),))
+                self.assertIn(item.upstream_url, details)
+                self.assertIn("Detected", details)
+                self.assertIn("version", details.lower())
+                self.assertIn("unknown", details.lower())
+                self.assertIn("Provenance: unknown", details)
+                if item.id == "rtk":
+                    self.assertIn("manual installation only", details)
+                else:
+                    self.assertIn("selected pin", details)
+                    self.assertIn("commit", details)
+                self.assertIn("Installation effects:", details)
+
+    def test_details_report_unknown_when_status_detection_fails(self):
+        details = installers.integration_details("last30days", detection_error="permission denied")
+        self.assertIn("Status: Unknown", details)
+        self.assertIn("permission denied", details)
+
+    def test_gui_refresh_displays_unknown_after_detection_failure(self):
+        from unittest.mock import Mock, patch
+        import install_gui
+        installer = install_gui.Installer.__new__(install_gui.Installer)
+        check, detail, selected = Mock(), Mock(), Mock()
+        installer.suggested_labels = {"last30days": (check, detail)}
+        installer.suggested_selected = {"last30days": selected}
+        installer.suggested_actions = {}
+        installer.suggested_busy = False
+        installer.suggested_refresh_button = Mock()
+        with patch.object(installers, "suggested_status", side_effect=PermissionError("permission denied")):
+            installer.refresh_suggested_status()
+        self.assertIn("Status unknown", detail.configure.call_args.kwargs["text"])
+        self.assertEqual(check.configure.call_args.kwargs["state"], "disabled")
+        selected.set.assert_called_with(False)
+
+    def test_refresh_keeps_suggested_install_actions_codex_only(self):
+        from unittest.mock import Mock, patch
+        import install_gui
+        installer = install_gui.Installer.__new__(install_gui.Installer)
+        installer.client = type("Variable", (), {"get": lambda self: "claude"})()
+        installer.suggested_labels = {}
+        installer.suggested_selected = {}
+        installer.suggested_actions = {}
+        installer.suggested_busy = False
+        installer.suggested_refresh_button = Mock()
+        for item in installers.SUGGESTED_ITEMS:
+            check, detail, selected = Mock(), Mock(), Mock()
+            installer.suggested_labels[item.id] = (check, detail)
+            installer.suggested_selected[item.id] = selected
+        with patch.object(installers, "suggested_status", return_value={
+            "rtk": None, **{item.id: () for item in installers.SUGGESTED_ITEMS if item.id != "rtk"}
+        }):
+            installer.refresh_suggested_status()
+        for item_id, (check, _) in installer.suggested_labels.items():
+            with self.subTest(item_id=item_id):
+                if item_id == "rtk":
+                    continue
+                self.assertEqual(check.configure.call_args.kwargs["state"], "disabled")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import queue
 import threading
+import webbrowser
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -118,6 +119,14 @@ class Installer:
         self.codegraph_description = ttk.Label(codegraph_card, text="Optional: install CodeGraph if needed and configure the selected client globally after confirmation.",
                                                style="CardMuted.TLabel", wraplength=600)
         self.codegraph_description.pack(anchor="w", padx=(26, 0), pady=(2, 0))
+        self.codegraph_status_label = ttk.Label(codegraph_card, text="Status unknown", style="CardMuted.TLabel", wraplength=600)
+        self.codegraph_status_label.pack(anchor="w", padx=(26, 0), pady=(4, 0))
+        codegraph_actions = ttk.Frame(codegraph_card, style="Card.TFrame")
+        codegraph_actions.pack(fill="x", padx=(26, 0), pady=(3, 0))
+        self.codegraph_details_button = ttk.Button(codegraph_actions, text="Details", command=self.show_codegraph_details)
+        self.codegraph_details_button.pack(side="left")
+        self.codegraph_refresh_button = ttk.Button(codegraph_actions, text="Refresh status", command=self.refresh_codegraph_status)
+        self.codegraph_refresh_button.pack(side="left", padx=(6, 0))
 
         scope_box = ttk.LabelFrame(outer, text="Install location", padding=10)
         scope_box.pack(fill="x", pady=(10, 0))
@@ -155,8 +164,11 @@ class Installer:
         for item in suggested_installers.SUGGESTED_ITEMS:
             check = ttk.Checkbutton(suggested_box, text=item.name, variable=self.suggested_selected[item.id])
             check.pack(anchor="w")
-            detail = ttk.Label(suggested_box, text=item.description, wraplength=680)
-            detail.pack(anchor="w", padx=(24, 0))
+            row = ttk.Frame(suggested_box)
+            row.pack(fill="x", padx=(24, 0))
+            detail = ttk.Label(row, text="Status unknown", wraplength=620, justify="left")
+            detail.pack(side="left", anchor="w", fill="x", expand=True)
+            ttk.Button(row, text="Details", command=lambda key=item.id: self.show_suggested_details(key)).pack(side="right", padx=(6, 0))
             self.suggested_checks.append(check)
             self.suggested_labels[item.id] = (check, detail)
         self.suggested_refresh_button = ttk.Button(suggested_box, text="Refresh status", command=self.refresh_suggested_status)
@@ -187,6 +199,7 @@ class Installer:
         self.install_queue = queue.Queue()
         self.install_busy = False
         self.refresh_suggested_status()
+        self.refresh_codegraph_status()
         for name in common.SKILL_NAMES:
             self.update_skill_card(name)
         outer.bind("<Configure>", self.fit_page_copy)
@@ -276,11 +289,11 @@ class Installer:
         description = getattr(self, "codegraph_description", None)
         if description is not None:
             description.configure(text="Optional: configure CodeGraph for Copilot CLI and VS Code globally after confirmation." if copilot else "Optional: install CodeGraph if needed and configure the selected client globally after confirmation.")
-        for check in self.suggested_checks:
-            check.configure(state="disabled" if claude or copilot else "normal")
         self.suggested_button.configure(state="disabled" if claude or copilot else "normal")
-        self.suggested_refresh_button.configure(state="disabled" if claude or copilot else "normal")
+        self.suggested_refresh_button.configure(state="disabled" if getattr(self, "suggested_busy", False) else "normal")
+        self.refresh_suggested_status()
         self.refresh_preview()
+        self.refresh_codegraph_status()
 
     def close(self) -> None:
         if self.suggested_busy or self.suggested_confirming or self.install_busy:
@@ -410,30 +423,80 @@ class Installer:
         self.refresh_suggested_status()
 
     def refresh_suggested_status(self) -> None:
-        status = suggested_installers.suggested_status()
+        try:
+            status = suggested_installers.suggested_status()
+            detection_error = None
+        except (OSError, RuntimeError, ValueError) as exc:
+            status = {}
+            detection_error = str(exc)
         by_id = {item.id: item for item in suggested_installers.SUGGESTED_ITEMS}
         for item_id, (check, detail) in self.suggested_labels.items():
             item = by_id[item_id]
-            locations = status[item_id]
+            locations = status.get(item_id)
+            if detection_error:
+                detail.configure(text=f"Status unknown — {detection_error}")
+                self.suggested_selected[item_id].set(False)
+                check.configure(text=item.name, state="disabled")
+                continue
             action = "manual" if item_id == "rtk" else "remove" if locations else "install"
             if self.suggested_actions.get(item_id) not in (None, action):
                 self.suggested_selected[item_id].set(False)
             self.suggested_actions[item_id] = action
             if item_id == "rtk" and locations:
-                detail.configure(text=f"{item.description} Installed at {locations}. Remove manually with your package manager.")
+                detail.configure(text=f"Detected command at {locations}; identity and version unknown. Manual removal only.")
                 check.configure(text=f"{item.name} (manual removal)", state="disabled")
                 self.suggested_selected[item_id].set(False)
             elif item_id == "rtk":
-                detail.configure(text=f"{item.description} Not detected on PATH. Automatic installation is unavailable because package-manager versions move; install a reviewed version manually from {suggested_installers.RTK_INSTALL_URL}.")
+                detail.configure(text="Not detected on PATH. Manual installation only; version is not selected here.")
                 check.configure(text=f"{item.name} (manual installation only)", state="disabled")
                 self.suggested_selected[item_id].set(False)
             elif locations:
-                detail.configure(text="Installed at: " + ", ".join(map(str, locations)))
-                check.configure(text=f"Remove {item.name}", state="disabled" if self.suggested_busy else "normal")
+                detail.configure(text="Detected copy at: " + ", ".join(map(str, locations)) + " · version and provenance unknown")
+                enabled = self.selected_client() == "codex" and not self.suggested_busy
+                check.configure(text=f"Remove {item.name}", state="normal" if enabled else "disabled")
             else:
-                detail.configure(text=f"Not installed in supported locations. {item.description}")
-                check.configure(text=f"Install {item.name}", state="disabled" if self.suggested_busy else "normal")
+                detail.configure(text="Not detected in supported locations · new install uses pinned commit" if item_id != "rtk" else item.description)
+                enabled = self.selected_client() == "codex" and not self.suggested_busy
+                check.configure(text=f"Install {item.name}", state="normal" if enabled else "disabled")
         self.suggested_refresh_button.configure(state="disabled" if self.suggested_busy else "normal")
+
+    def refresh_codegraph_status(self) -> None:
+        label = getattr(self, "codegraph_status_label", None)
+        if label is None:
+            return
+        try:
+            path = codegraph_installer.detected_command()
+            label.configure(text=codegraph_installer.status_text(path))
+        except (OSError, RuntimeError, ValueError) as exc:
+            path = None
+            label.configure(text=codegraph_installer.status_text(None, detection_error=str(exc)))
+
+    def _show_integration_details(self, title: str, text: str, url: str) -> None:
+        window = tk.Toplevel(self.root)
+        window.title(title + " details")
+        window.transient(self.root)
+        body = ttk.Frame(window, padding=14)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=text, wraplength=620, justify="left").pack(anchor="w", fill="x")
+        ttk.Button(body, text="Open official project page", command=lambda: webbrowser.open(url)).pack(anchor="e", pady=(12, 0))
+
+    def show_suggested_details(self, item_id: str) -> None:
+        item = next(item for item in suggested_installers.SUGGESTED_ITEMS if item.id == item_id)
+        try:
+            status = suggested_installers.suggested_status()
+            locations = status.get(item_id)
+            error = None
+        except (OSError, RuntimeError, ValueError) as exc:
+            locations, error = (), str(exc)
+        self._show_integration_details(item.name, suggested_installers.integration_details(item_id, locations or (), detection_error=error), item.upstream_url)
+
+    def show_codegraph_details(self) -> None:
+        try:
+            path = codegraph_installer.detected_command()
+            error = None
+        except (OSError, RuntimeError, ValueError) as exc:
+            path, error = None, str(exc)
+        self._show_integration_details("CodeGraph", codegraph_installer.integration_details(path, detection_error=error), codegraph_installer.UPSTREAM_URL)
 
     def scope_changed(self) -> None:
         self.load_activation()
@@ -626,7 +689,7 @@ class Installer:
                 lines.extend(f"  {item.action} managed instructions: {item.path}" for item in activation_plans)
             if wants_codegraph:
                 codegraph_plan = codegraph_installer.plan_install(self.selected_client())
-                client_name = "Claude Code" if self.selected_client() == "claude" else "Codex"
+                client_name = {"claude": "Claude Code", "copilot": "GitHub Copilot CLI and VS Code", "codex": "Codex"}[self.selected_client()]
                 lines.extend(["", "CodeGraph: optional user-wide tool", codegraph_plan.details,
                               f"  Configures {client_name} globally, including MCP configuration and managed instructions.",
                               f"  No project indexing or initialization will run. Restart {client_name} if needed."])
@@ -735,7 +798,8 @@ class Installer:
         client = self.client.get()
         self.codegraph_check.configure(state="normal")
         self.suggested_button.configure(state="disabled" if client in ("claude", "copilot") else "normal")
-        self.suggested_refresh_button.configure(state="disabled" if client in ("claude", "copilot") else "normal")
+        self.suggested_refresh_button.configure(state="disabled" if self.suggested_busy else "normal")
+        self.refresh_codegraph_status()
 
     def poll_install_result(self) -> None:
         try:

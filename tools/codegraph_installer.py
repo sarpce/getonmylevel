@@ -13,6 +13,30 @@ import subprocess
 PACKAGE = "@colbymchenry/codegraph"
 PACKAGE_VERSION = "1.6.4"
 PINNED_PACKAGE = f"{PACKAGE}@{PACKAGE_VERSION}"
+UPSTREAM_URL = "https://github.com/colbymchenry/codegraph"
+
+
+def detected_command() -> str | None:
+    """Return the local PATH command without executing it or claiming its identity."""
+    return shutil.which("codegraph")
+
+
+def status_text(path: str | None, *, detection_error: str | None = None) -> str:
+    if detection_error:
+        return f"Status unknown (detection failed: {detection_error})"
+    if path:
+        return f"Detected command at {path}; identity unknown, installed version unknown, provenance unknown"
+    return "Not detected on PATH; installations elsewhere are not ruled out"
+
+
+def integration_details(path: str | None, *, detection_error: str | None = None) -> str:
+    selected = f"New installation selection: {PINNED_PACKAGE}. This is the selected package version, not a test claim."
+    installed = "Installed version: unknown. Provenance is unknown; this project has no evidence that an existing copy is managed by it."
+    effects = ("A new install downloads the npm package and dependencies and may execute package lifecycle code. "
+               "Setup executes CodeGraph to configure the selected client's global MCP configuration and managed instructions. "
+               "No project is initialized or indexed.")
+    return "\n".join((f"Upstream project: {UPSTREAM_URL}", "Status: " + status_text(path, detection_error=detection_error),
+                       selected, installed, "Installation effects: " + effects))
 def install_args(client: str = "codex") -> tuple[str, ...]:
     if client == "copilot":
         return ("install", "--target=copilot-cli,copilot-vscode", "--location=global", "--yes")
@@ -88,7 +112,7 @@ def _package_cli(prefix: Path) -> Path:
 def plan_install(client: str = "codex") -> CodeGraphPlan:
     """Inspect prerequisites and construct a fixed, user-wide client plan."""
     args = install_args(client)
-    existing = shutil.which("codegraph")
+    existing = detected_command()
     if existing:
         path = Path(existing).resolve()
         if os.name == "nt" and path.suffix.lower() in (".cmd", ".bat"):

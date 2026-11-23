@@ -43,6 +43,43 @@ _DESIGN_SKILL_EFFECTS = {
     "anti_ui_slop": "Uses its upstream public design catalogue when the agent follows a catalogue link.",
 }
 
+_INTEGRATION_PINS = {
+    "last30days": LAST30_COMMIT,
+    "cli_anything": CLI_ANYTHING_COMMIT,
+    **{item_id: values[2] for item_id, values in _OPTIONAL_DESIGN_SKILLS.items()},
+}
+
+_INTEGRATION_EFFECTS = {
+    "rtk": "No automatic installation is offered. A manual package-manager installation may execute package scripts; this project does not change Codex configuration.",
+    "last30days": "Downloads the selected Git commit and copies skill files. The copied skill is not executed during installation; client configuration is unchanged.",
+    "cli_anything": "Downloads the selected Git commit, then executes its upstream installer with your privileges. It copies skill files and does not configure Codex.",
+    "impeccable": "Downloads the selected Git commit and copies skill files. It does not execute the skill or configure hooks; its engine may download a platform binary on first use.",
+    "ui_ux_pro_max": "Downloads the selected Git commit and copies/adapts skill files and data. It does not execute the skill or change client configuration.",
+    "anti_ui_slop": "Downloads the selected Git commit and copies skill files. It does not execute the skill or change client configuration.",
+}
+
+
+def integration_details(item_id: str, locations=(), *, detection_error: str | None = None) -> str:
+    """Describe known status and installation facts without inferring copy identity."""
+    item = next((item for item in SUGGESTED_ITEMS if item.id == item_id), None)
+    if item is None:
+        raise ValueError(f"Unknown suggested integration: {item_id}")
+    if detection_error:
+        status = f"Status: Unknown (status detection failed: {detection_error})"
+    elif item_id == "rtk":
+        status = f"Detected command: {', '.join(map(str, locations)) if isinstance(locations, (tuple, list)) else locations}; identity unknown, installed version unknown, provenance unknown." if locations else "Status: No rtk command detected on PATH; this does not rule out installations elsewhere."
+    elif locations:
+        status = "Detected copy at: " + ", ".join(map(str, locations))
+    else:
+        status = "Status: Not detected in supported skill locations."
+    pin = _INTEGRATION_PINS.get(item_id)
+    selected = f"New installation selection: commit {pin} (selected pin; not a test claim)." if pin else "New installation selection: none (manual installation only)."
+    existing = "Existing installed version: unknown. Provenance: unknown; ownership by getonmylevel is not established by presence alone."
+    if item_id == "rtk":
+        existing = "Installed version: unknown. Provenance: unknown; this project does not manage that command."
+    return "\n".join((f"Upstream project: {item.upstream_url}", status, selected, existing,
+                       "Installation effects: " + _INTEGRATION_EFFECTS[item_id]))
+
 
 @dataclass(frozen=True)
 class SuggestedItem:

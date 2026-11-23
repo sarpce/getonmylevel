@@ -62,13 +62,22 @@ class CodeGraphInstallTests(unittest.TestCase):
         installer.suggested_checks = []
         installer.suggested_button = Mock()
         installer.suggested_refresh_button = Mock()
+        installer.suggested_labels = {"rtk": (Mock(), Mock())}
+        installer.suggested_selected = {"rtk": self.Variable(True)}
+        installer.suggested_actions = {}
+        installer.suggested_busy = False
         installer.refresh_preview = Mock()
-        installer.client_changed()
+        with patch.object(install_gui.suggested_installers, "suggested_status", return_value={"rtk": None}):
+            installer.client_changed()
         self.assertFalse(installer.codegraph_selected.get())
+        self.assertEqual(installer.suggested_labels["rtk"][0].configure.call_args.kwargs["state"], "disabled")
         installer.client.set("codex")
-        installer.client_changed()
+        with patch.object(install_gui.suggested_installers, "suggested_status", side_effect=PermissionError("unknown")):
+            installer.client_changed()
         self.assertTrue(installer.codegraph_selected.get())
         installer.codegraph_check.configure.assert_called_with(state="normal")
+        self.assertEqual(installer.suggested_labels["rtk"][0].configure.call_args.kwargs["state"], "disabled")
+        self.assertFalse(installer.suggested_selected["rtk"].get())
 
     def test_explicit_codegraph_plan_targets_each_client(self):
         for client in ("codex", "claude", "copilot"):
@@ -154,6 +163,26 @@ class CodeGraphInstallTests(unittest.TestCase):
             plan = codegraph_installer.plan_install()
         self.assertIn(codegraph_installer.PINNED_PACKAGE, plan.npm_install)
         self.assertIn(codegraph_installer.PINNED_PACKAGE, plan.details)
+
+    def test_status_detection_does_not_execute_or_claim_command_identity(self):
+        with patch.object(codegraph_installer.shutil, "which", return_value="/local/codegraph") as which, \
+             patch.object(codegraph_installer, "_run", side_effect=AssertionError("must not execute command")):
+            path = codegraph_installer.detected_command()
+        which.assert_called_once_with("codegraph")
+        self.assertIn("version unknown", codegraph_installer.status_text(path))
+        self.assertIn("not ruled out", codegraph_installer.status_text(None))
+
+    def test_details_show_upstream_selected_pin_unknown_provenance_and_effects(self):
+        details = codegraph_installer.integration_details("/local/codegraph")
+        self.assertIn(codegraph_installer.UPSTREAM_URL, details)
+        self.assertIn(codegraph_installer.PINNED_PACKAGE, details)
+        self.assertIn("Installed version: unknown", details)
+        self.assertIn("Provenance is unknown", details)
+        self.assertIn("MCP configuration", details)
+        self.assertIn("package lifecycle code", details)
+
+    def test_status_detection_failure_is_unknown(self):
+        self.assertIn("Status unknown", codegraph_installer.status_text(None, detection_error="permission denied"))
 
 
 if __name__ == "__main__":

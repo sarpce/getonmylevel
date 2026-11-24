@@ -15,15 +15,35 @@ CLIENT_LABELS = {"codex": "Codex", "claude": "Claude Code", "copilot": "GitHub C
 
 
 SKILL_NAMES = (
-    "getonmylevel-communication",
+    "getonmylevel-verify",
+    "getonmylevel-ui-check",
     "getonmylevel-context",
-    "getonmylevel-engineering",
-    "getonmylevel-design",
-    "getonmylevel-good-software-engineering-practices",
-    "getonmylevel-skill-discovery",
-    "getonmylevel-simplicity",
 )
-AGENT_NAMES = ("designer", "implementer", "reviewer", "tester")
+# Skills shipped before the 2026-11 redesign. They are recognized in managed
+# instruction blocks so upgrades can migrate them, and their installed
+# directories are retired (moved to backups) on install or update.
+LEGACY_SKILL_MAP = {
+    "getonmylevel-communication": (),
+    "getonmylevel-context": ("getonmylevel-context",),
+    "getonmylevel-engineering": ("getonmylevel-verify",),
+    "getonmylevel-design": ("getonmylevel-ui-check",),
+    "getonmylevel-good-software-engineering-practices": ("getonmylevel-verify",),
+    "getonmylevel-skill-discovery": (),
+    "getonmylevel-simplicity": ("getonmylevel-verify",),
+}
+LEGACY_SKILL_NAMES = tuple(LEGACY_SKILL_MAP)
+RETIRED_SKILL_NAMES = tuple(name for name in LEGACY_SKILL_NAMES if name not in SKILL_NAMES)
+AGENT_NAMES = ("reviewer",)
+# Roles from the former designer -> implementer workflow; they can only be removed.
+RETIRED_AGENT_NAMES = ("designer", "implementer", "tester")
+
+
+def migrate_skill_names(names: Iterable[str]) -> list[str]:
+    """Map legacy skill names to their replacements, in current bundle order."""
+    wanted: set[str] = set()
+    for name in names:
+        wanted.update(LEGACY_SKILL_MAP.get(name, (name,) if name in SKILL_NAMES else ()))
+    return [name for name in SKILL_NAMES if name in wanted]
 
 
 @dataclass(frozen=True)

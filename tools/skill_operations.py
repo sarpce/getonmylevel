@@ -1,4 +1,5 @@
 ﻿"""Shared, headless operations for bundled skill installation."""
+from dataclasses import dataclass
 from pathlib import Path
 import stat
 import tempfile
@@ -27,10 +28,46 @@ def roots_for(scope, repo, client):
     return repo, common.skill_roots(scope, repo, client)
 
 
+@dataclass(frozen=True)
+class RetiredSkill:
+    """An installed skill from an earlier release, moved to backups on install or update.
+
+    Retired skill bodies still carry the old always-ask workflow rules, and
+    clients discover installed skills natively, so leaving them in place would
+    keep those rules active after the managed block is upgraded.
+    """
+    path: Path
+    identity: tuple[int, int]
+    action: str = "Retire (backup kept)"
+
+
+def _retired_in(root):
+    found = []
+    for name in common.RETIRED_SKILL_NAMES:
+        path = root / name
+        if common.is_link_or_reparse(path):
+            raise ValueError(f"Refusing linked or reparse-point destination: {path}")
+        if path.is_dir() and (path / "SKILL.md").is_file():
+            common._validate_backup_root(root.parent / "getonmylevel-backups")
+            found.append(RetiredSkill(path, common._identity(path)))
+    return found
+
+
 def plan_install(names, scope, repo, client):
+    """Plan skill copies plus the upgrade steps an earlier install needs.
+
+    The returned plans hold managed-block upgrades (``InstructionUpdate``) and
+    retired skill directories (``RetiredSkill``); ``perform_install`` applies both.
+    """
     repo, roots = roots_for(scope, repo, client)
     copies = common.preflight_skill_copy(SOURCE_ROOT, names, roots)
     plans = []
+    scopes = ("user", "repo") if scope == "both" else (scope,)
+    for kind, root in zip(scopes, roots):
+        installed = {name for name in common.SKILL_NAMES if (root / name / "SKILL.md").is_file()}
+        plans.extend(_retired_in(root))
+        plans.extend(instructions.plan_instruction_upgrades(kind, repo if kind == "repo" else None, client,
+                                                            available=installed | set(names)))
     return roots, copies, plans
 
 
@@ -93,8 +130,13 @@ def skill_status(scope, repo, client, names=None):
 
 
 def perform_install(copies, plans, client="codex"):
+    retired = [plan for plan in plans if isinstance(plan, RetiredSkill)]
+    updates = [plan for plan in plans if not isinstance(plan, RetiredSkill)]
     result = common.copy_skills(copies)
-    return result, instructions.write_instruction_updates(plans, client)
+    if retired:
+        backups, _ = perform_remove([(plan.path, plan.identity) for plan in retired], [], client)
+        result = common.SkillCopyResult(result.installed, result.updated, (*result.backups, *backups))
+    return result, instructions.write_instruction_updates(updates, client)
 
 
 def plan_remove(names, scope, repo, client):
@@ -111,6 +153,8 @@ def plan_remove(names, scope, repo, client):
                     raise ValueError(f"Refusing directory without SKILL.md: {path}")
                 common._validate_backup_root(root.parent / "getonmylevel-backups")
                 paths.append((path, common._identity(path)))
+        if set(selected) == set(common.SKILL_NAMES):
+            paths.extend((plan.path, plan.identity) for plan in _retired_in(root))
     return paths, instructions.plan_selected_removals(scope, repo, selected, client)
 
 
@@ -155,5 +199,6 @@ def plan_activation(selections, repo, client):
                 missing.append(name)
         if missing:
             copies.extend(common.preflight_skill_copy(SOURCE_ROOT, missing, roots))
+        plans.extend(_retired_in(root))
         plans.extend(instructions.plan_instruction_updates(scope, target_repo, names, client))
     return copies, plans

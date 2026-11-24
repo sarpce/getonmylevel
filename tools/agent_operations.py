@@ -21,6 +21,7 @@ import common
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_ROOT = REPO_ROOT / "optional" / "agents"
+RETIRED_TEMPLATE_ROOT = TEMPLATE_ROOT / "retired"
 MAX_LINE_BYTES = 1_000_000
 MAX_PAGES = 10
 MAX_MODELS = 1000
@@ -281,20 +282,46 @@ def copilot_models() -> dict[str, list[str]]:
     return asyncio.run(query())
 
 
+def _load_template(path: Path) -> dict[str, str]:
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith(MARKER + "\n"):
+        raise ValueError(f"Agent template is missing its management marker: {path}")
+    data = tomllib.loads(text[len(MARKER) + 1 :])
+    if set(data) != {"name", "description", "developer_instructions"}:
+        raise ValueError(f"Agent template has unexpected fields: {path}")
+    if not all(isinstance(data[key], str) for key in data):
+        raise ValueError(f"Agent template fields must be strings: {path}")
+    return data
+
+
 def load_templates() -> dict[str, dict[str, str]]:
-    templates: dict[str, dict[str, str]] = {}
-    for role in common.AGENT_NAMES:
-        path = TEMPLATE_ROOT / f"getonmylevel_{role}.toml"
-        text = path.read_text(encoding="utf-8")
-        if not text.startswith(MARKER + "\n"):
-            raise ValueError(f"Agent template is missing its management marker: {path}")
-        data = tomllib.loads(text[len(MARKER) + 1 :])
-        if set(data) != {"name", "description", "developer_instructions"}:
-            raise ValueError(f"Agent template has unexpected fields: {path}")
-        if not all(isinstance(data[key], str) for key in data):
-            raise ValueError(f"Agent template fields must be strings: {path}")
-        templates[role] = data
-    return templates
+    return {role: _load_template(TEMPLATE_ROOT / f"getonmylevel_{role}.toml") for role in common.AGENT_NAMES}
+
+
+def accepted_templates(role: str) -> list[dict[str, str]]:
+    """Templates an unedited managed file for this role may match: current first, then earlier releases.
+
+    Retired roles have no current template; their files can only be removed.
+    """
+    found = [load_templates()[role]] if role in common.AGENT_NAMES else []
+    retired = RETIRED_TEMPLATE_ROOT / f"getonmylevel_{role}.toml"
+    if retired.is_file():
+        found.append(_load_template(retired))
+    if not found:
+        raise ValueError(f"Unknown agent role: {role}")
+    return found
+
+
+def _parse_known(parser, path: Path, role: str, client: str) -> tuple[str, str]:
+    """Parse a managed role file written from the current or an earlier template."""
+    error: ValueError | None = None
+    for template in accepted_templates(role):
+        expected = claude_expected(role, template) if client in ("claude", "copilot", "opencode") else template
+        try:
+            return parser(path, expected)
+        except ValueError as exc:
+            error = error or exc
+    raise error
 
 
 def parse_managed_file(path: Path, expected: dict[str, str]) -> tuple[str, str]:
@@ -411,7 +438,6 @@ def parse_opencode_managed_file(path: Path, expected: dict[str, str]) -> tuple[s
 
 def opencode_model_suggestions(roots: Iterable[Path]) -> tuple[str, ...]:
     """Offer only models already present in managed OpenCode agent files under the selected roots."""
-    templates = load_templates()
     found: list[str] = []
     for root in roots:
         for role in common.AGENT_NAMES:
@@ -419,7 +445,7 @@ def opencode_model_suggestions(roots: Iterable[Path]) -> tuple[str, ...]:
             try:
                 if common.is_link_or_reparse(path) or not path.is_file():
                     continue
-                model, _effort = parse_opencode_managed_file(path, claude_expected(role, templates[role]))
+                model, _effort = _parse_known(parse_opencode_managed_file, path, role, "opencode")
             except (OSError, ValueError, UnicodeError):
                 continue
             if model and model not in found:
@@ -428,7 +454,7 @@ def opencode_model_suggestions(roots: Iterable[Path]) -> tuple[str, ...]:
 
 
 def agent_filename(role: str, client: str) -> str:
-    if role not in common.AGENT_NAMES or client not in common.CLIENTS:
+    if role not in (*common.AGENT_NAMES, *common.RETIRED_AGENT_NAMES) or client not in common.CLIENTS:
         raise ValueError("Unknown agent role or client.")
     if client == "copilot":
         return f"getonmylevel-{role}.agent.md"
@@ -510,7 +536,10 @@ def role_plan(client: str, scope: str, repo: Path | None, roles: list[str],
     """Validate and plan managed agent file installs, updates, or removals."""
     if action not in ("install", "update", "remove"):
         raise ValueError(f"Unknown role action: {action}")
-    roles = common.validate_selection(roles, common.AGENT_NAMES, "agent role")
+    allowed = (*common.AGENT_NAMES, *common.RETIRED_AGENT_NAMES) if action == "remove" else common.AGENT_NAMES
+    if action != "remove" and set(roles) & set(common.RETIRED_AGENT_NAMES):
+        raise ValueError("The designer, implementer, and tester roles are retired; they can only be removed.")
+    roles = common.validate_selection(roles, allowed, "agent role")
     if not roles:
         raise ValueError("Select at least one agent role.")
     roots = common.agent_roots(scope, repo, client)
@@ -527,21 +556,23 @@ def role_plan(client: str, scope: str, repo: Path | None, roles: list[str],
             snapshot = _role_file_snapshot(path) if client in ("claude", "opencode") else None
             if client not in ("claude", "opencode") and common.is_link_or_reparse(path):
                 raise ValueError(f"Refusing linked or reparse-point destination path: {path}")
-            expected = claude_expected(role, templates[role]) if client in ("claude", "copilot", "opencode") else templates[role]
             parser = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file,
                       "opencode": parse_opencode_managed_file}.get(client, parse_managed_file)
             existing_model, existing_effort = ("", "")
             if path.exists():
-                existing_model, existing_effort = parser(path, expected)
+                existing_model, existing_effort = _parse_known(parser, path, role, client)
             if client in ("claude", "opencode") and _role_file_snapshot(path) != snapshot:
                 raise ValueError(f"Destination changed while preparing role configuration: {path}")
             if client in ("claude", "opencode"):
                 snapshots[path] = snapshot
             if action == "remove":
+                if not path.exists() and role in common.RETIRED_AGENT_NAMES:
+                    continue  # cleaning up retired roles skips ones that were never installed
                 if not path.exists():
                     raise FileNotFoundError(f"Managed role file is not installed: {path}")
                 planned.append((role, path, None))
                 continue
+            expected = claude_expected(role, templates[role]) if client in ("claude", "copilot", "opencode") else templates[role]
             model = models.get(role, existing_model).strip()
             effort = efforts.get(role, existing_effort).strip()
             if client == "copilot" and effort:
@@ -555,13 +586,14 @@ def role_plan(client: str, scope: str, repo: Path | None, roles: list[str],
             renderer = {"claude": render_claude_agent, "copilot": render_copilot_agent,
                         "opencode": render_opencode_agent}.get(client, render_agent)
             planned.append((role, path, renderer(expected, model, effort)))
+    if not planned:
+        raise FileNotFoundError("None of the selected role files are installed in the selected scope.")
     return RolePlan(planned, snapshots=snapshots)
 
 
 def perform_role_plan(plan: list[tuple[str, Path, str | None]], client: str, action: str) -> tuple[list[str], list[str]]:
     """Apply a role plan, returning completed paths and backup paths (currently none)."""
     completed: list[str] = []
-    templates = load_templates()
     parsers = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file,
                "opencode": parse_opencode_managed_file}
     try:
@@ -577,16 +609,15 @@ def perform_role_plan(plan: list[tuple[str, Path, str | None]], client: str, act
             common.check_managed_root(path.parent)
             if common.is_link_or_reparse(path):
                 raise ValueError(f"Refusing linked or reparse-point destination path: {path}")
-            expected = claude_expected(role, templates[role]) if client in ("claude", "copilot", "opencode") else templates[role]
             parser = parsers.get(client, parse_managed_file)
             if action == "remove":
                 if not path.exists():
                     raise FileNotFoundError(f"Managed role file disappeared before removal: {path}")
-                parser(path, expected)
+                _parse_known(parser, path, role, client)
                 path.unlink()
             else:
                 if path.exists():
-                    parser(path, expected)
+                    _parse_known(parser, path, role, client)
                 if content is None:
                     raise ValueError(f"No content was planned for {path}")
                 write_atomic(path, content)

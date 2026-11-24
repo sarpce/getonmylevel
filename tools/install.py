@@ -5,6 +5,12 @@ import common
 import skill_operations as operations
 
 
+def _describe(plan):
+    if isinstance(plan, operations.RetiredSkill):
+        return f"{plan.action}: {plan.path}"
+    return f"Instructions ({plan.action}): {plan.path}"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("install", "update", "remove", "activate"))
@@ -26,9 +32,11 @@ def main(argv=None):
             for copy in copies:
                 print(f"Required installation: {copy.destination}")
             for plan in plans:
-                print(f"Instructions ({plan.action}): {plan.path}")
+                print(_describe(plan))
             if not args.dry_run:
-                operations.perform_install(copies, plans, args.client)
+                result, _ = operations.perform_install(copies, plans, args.client)
+                for backup in result.backups:
+                    print(f"Backup: {backup}")
         elif args.action == "remove":
             paths, plans = operations.plan_remove(names, args.scope, args.repo, args.client)
             for path, _ in paths:
@@ -46,7 +54,7 @@ def main(argv=None):
             for copy in copies:
                 print(f"{'Update' if copy.is_update else 'Install'}: {copy.destination}")
             for plan in plans:
-                print(f"Instructions ({plan.action}): {plan.path}")
+                print(_describe(plan))
             if not args.dry_run:
                 result, written = operations.perform_install(copies, plans, args.client)
                 for backup in result.backups:

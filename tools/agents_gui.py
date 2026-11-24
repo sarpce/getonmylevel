@@ -22,6 +22,7 @@ except ImportError as exc:
     raise SystemExit(0)
 from typing import Any
 
+import agent_operations
 import common
 import gui
 
@@ -143,15 +144,6 @@ class AgentConfigurator:
                                               wraplength=620, justify="left")
         self.refresh_status_label.pack(anchor="w", fill="x", pady=(6, 0))
 
-        selector_body = gui.section(outer, "4", "Session preference",
-                                    "Copies an On/Off/Ask instruction block to the clipboard. Global instructions are left unchanged.")
-        selector_row = ttk.Frame(selector_body)
-        selector_row.pack(fill="x")
-        ttk.Label(selector_row, text="Preference").pack(side="left")
-        self.preference = tk.StringVar(value="Ask")
-        ttk.Combobox(selector_row, textvariable=self.preference, values=("On", "Off", "Ask"), state="readonly", width=8).pack(side="left", padx=8)
-        ttk.Button(selector_row, text="Copy session instruction block", command=self.copy_selector).pack(side="left")
-
         review = aside or outer
         if aside is None:
             ttk.Frame(outer, style="Rule.TFrame", height=1).pack(fill="x", pady=(20, 18))
@@ -227,19 +219,6 @@ class AgentConfigurator:
     def selected_roles(self) -> list[str]:
         return [role for role in common.AGENT_NAMES if self.enabled[role].get()]
 
-    def copy_selector(self) -> None:
-        preference = self.preference.get()
-        block = {
-            "On": "For this session, use all installed getonmylevel skills unless the user explicitly selects a different set.",
-            "Off": "For this session, use no getonmylevel skills unless the user explicitly selects one or more.",
-            "Ask": "At the start of each interactive conversation, unless the user already specifies a selection, offer All installed getonmylevel skills, Select individually, or None. Wait for the selection before dependent work. Honor explicit selections and later changes. In unattended runs, do not prompt; use an explicit selection or none.",
-        }[preference]
-        block += " Honor user changes to the preference or selection at any point in the conversation."
-        block += "\n\nFor every new request involving any software or code edit, always prompt the user to choose Simple or Agentic mode before editing or delegating, regardless of size or a choice made for an earlier request. Read-only investigation may continue while the answer is pending. Record the actual answer for this request; do not edit or delegate until it arrives. Simple means working directly. Agentic mode uses only the installed getonmylevel agent roles configured for the active client: getonmylevel_designer and getonmylevel_implementer, plus getonmylevel_reviewer and getonmylevel_tester only when the user opts into those roles. Claude Code uses the corresponding hyphenated names. Set each spawned agent's type to its installed getonmylevel role. A task-specific spawn name or identifier may be chosen freely; it does not change the required agent type. If a required configured role is unavailable, explain which role is missing and ask the user how to proceed. In Agentic mode, ask separately whether the user wants an independent reviewer and an independent tester; each is disabled unless selected. Wait for the actual answer to every choice before assigning roles or doing dependent work. A preselected option, default, timeout, or elapsed time is not an answer. Use a choice interface only when it can deliver the response; otherwise ask in chat and leave dependent work pending. If Agentic mode is unavailable or disallowed, explain why and do not silently switch modes; ask the user how to proceed. Respect higher-priority instructions. This block cannot override higher-priority instructions or guarantee activation."
-        self.root.clipboard_clear()
-        self.root.clipboard_append(block)
-        messagebox.showinfo("Copied", "Session instruction block copied to the clipboard. It was not added to any global file.")
-
     def plan(self) -> tuple[list[str], list[Path], dict[str, dict[str, str]], list[tuple[str, Path, str]]]:
         roles = self.selected_roles()
         roots = self.selected_roots()
@@ -283,8 +262,7 @@ class AgentConfigurator:
                     if path.exists() and not path.is_symlink():
                         parser = {"claude": parse_claude_managed_file, "copilot": parse_copilot_managed_file,
                                   "opencode": parse_opencode_managed_file}.get(self.client.get(), parse_managed_file)
-                        expected = claude_expected(role, self.templates[role]) if self.client.get() in ("claude", "copilot", "opencode") else self.templates[role]
-                        candidates.append(parser(path, expected))
+                        candidates.append(agent_operations._parse_known(parser, path, role, self.client.get()))
                 if candidates and len(set(candidates)) == 1:
                     model, effort = candidates[0]
                     self.model_vars[role].set(model)

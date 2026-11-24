@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import common
 import instruction_integration as integration
+import legacy_blocks
 import install_gui
 import agents_gui
 
@@ -80,163 +81,160 @@ class InstructionIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "edited outside model settings"):
             agents_gui.parse_copilot_managed_file(path, expected)
 
-    def test_exact_selection_and_no_embedded_policy(self):
-        design, engineering = "getonmylevel-design", "getonmylevel-engineering"
-        for client in ("codex", "claude"):
+    def test_block_is_a_short_index_without_workflow_policy(self):
+        for client in common.CLIENTS:
             for scope in ("user", "repo"):
-                block = integration._block([design], scope, "\n", client)
-                self.assertIn(design, block)
-                for word in ("delegation", "review", "testing", "For each task"):
-                    self.assertNotIn(word, block)
+                with self.subTest(client=client, scope=scope):
+                    block = integration._block(SKILLS, scope, "\n", client)
+                    self.assertLess(len(block.split()), 120)
+                    for name in SKILLS:
+                        self.assertIn(f"{name}/SKILL.md`: ", block)
+                    for phrase in ("Simple", "Agentic", "CodeGraph", "start of each conversation", "always", "MUST"):
+                        self.assertNotIn(phrase, block)
+
+    def test_exact_selection_preserves_bom_crlf_and_surrounding_text(self):
+        verify, ui = "getonmylevel-verify", "getonmylevel-ui-check"
         path = self.codex / "AGENTS.md"
-        original = b"\xef\xbb\xbfBefore\r\n" + integration._current_block([design, engineering], "user", "\r\n").encode() + b"\r\nAfter\r\n"
-        path.write_bytes(original)
-        plan, = integration.plan_instruction_updates("user", None, [design])
+        path.write_bytes(b"\xef\xbb\xbfBefore\r\n" + integration._block([verify, ui], "user", "\r\n").encode() + b"\r\nAfter\r\n")
+        plan, = integration.plan_instruction_updates("user", None, [verify])
         integration.write_instruction_updates([plan])
         content = path.read_bytes()
         self.assertTrue(content.startswith(b"\xef\xbb\xbfBefore\r\n"))
         self.assertTrue(content.endswith(b"\r\nAfter\r\n"))
-        self.assertIn(design.encode(), content)
-        self.assertNotIn(engineering.encode(), content)
-        self.assertEqual(integration.plan_instruction_updates("user", None, [design])[0].action, "Already current")
+        self.assertIn(verify.encode(), content)
+        self.assertNotIn(ui.encode(), content)
+        self.assertEqual(integration.plan_instruction_updates("user", None, [verify])[0].action, "Already current")
         plan, = integration.plan_instruction_updates("user", None, [])
         integration.write_instruction_updates([plan])
         self.assertEqual(path.read_bytes(), b"\xef\xbb\xbfBefore\r\n\r\nAfter\r\n")
 
-    def test_engineering_activation_requests_delegation_and_upgrades_old_block(self):
-        engineering = "getonmylevel-engineering"
-        for client in ("codex", "claude"):
-            for scope in ("user", "repo"):
-                with self.subTest(client=client, scope=scope):
-                    old = integration._prior_block([engineering], scope, "\n", client)
-                    updated, action = integration._updated_bytes(old.encode(), scope, [engineering], client)
-                    self.assertEqual(action, "Update")
-                    self.assertIn(b"## Agentic mode", updated)
-                    self.assertIn(b"request it directly", updated)
-                    self.assertIn(b"I request delegation to sub-agents", updated)
-                    previous = integration._delegation_block([engineering], scope, "\n", client).encode()
-                    self.assertEqual(integration._updated_bytes(previous, scope, [engineering], client), (updated, "Update"))
-                    self.assertEqual(integration._updated_bytes(updated, scope, [engineering], client)[1], "Already current")
-                    removed, action = integration._updated_bytes(updated, scope, [], client)
-                    self.assertEqual((removed, action), (b"", "Remove"))
+    def test_legacy_renderers_are_frozen(self):
+        # Upgrades recognize old blocks byte-for-byte; editing a legacy string breaks migration.
+        import hashlib
+        environment = {key: value for key, value in os.environ.items() if key != "CLAUDE_CONFIG_DIR"}
+        with mock.patch.dict(os.environ, environment, clear=True):
+            digest = hashlib.sha256()
+            order = legacy_blocks.LEGACY_ORDER
+            for combo in ([order[0]], list(order[1:4]), list(order)):
+                for client in ("codex", "claude", "copilot", "opencode"):
+                    for kind in ("user", "repo"):
+                        for candidate in legacy_blocks.candidates(combo, kind, "\n", client):
+                            digest.update(candidate.encode())
+            digest.update(legacy_blocks.shared_block(list(order[:2]), list(order[2:]), "\r\n").encode())
+        self.assertEqual(digest.hexdigest(), "6d366cee6542a026f25f9709397c9cedb9fbd9e8d442ff3145f6509600e32653")
 
-    def test_mode_gate_is_added_only_for_relevant_active_skills(self):
-        gate_skills = ("getonmylevel-communication", "getonmylevel-engineering",
-                       "getonmylevel-good-software-engineering-practices")
-        for client in ("codex", "claude"):
+    def test_every_legacy_block_upgrades_twice_without_losing_user_text(self):
+        claude = self.root / "claude"
+        claude.mkdir()
+        legacy = ["getonmylevel-communication", "getonmylevel-engineering", "getonmylevel-design"]
+        expected = ["getonmylevel-verify", "getonmylevel-ui-check"]
+        for client in ("codex", "claude", "copilot"):
             for scope in ("user", "repo"):
-                with self.subTest(client=client, scope=scope):
-                    for skill in gate_skills:
-                        updated, action = integration._updated_bytes(None, scope, [skill], client)
-                        self.assertEqual(action, "Create")
-                        text = updated.decode()
-                        self.assertIn("choose Simple or Agentic mode before editing or delegating", text)
-                        self.assertIn("Read-only investigation may continue", text)
-                        self.assertIn("Record the actual answer for this request", text)
-                        self.assertIn("independent reviewer and an independent tester", text)
-                    design, = [name for name in SKILLS if name not in gate_skills][:1]
-                    updated, _ = integration._updated_bytes(None, scope, [design], client)
-                    self.assertNotIn(b"choose Simple or Agentic mode", updated)
+                for newline in ("\n", "\r\n"):
+                    for index, render in enumerate(legacy_blocks.RENDERERS):
+                        with self.subTest(client=client, scope=scope, newline=repr(newline), renderer=index), \
+                             mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude)}), \
+                             mock.patch.object(Path, "home", return_value=self.root / "home"):
+                            repo = self.repo if scope == "repo" else None
+                            root = integration._instruction_roots(scope, repo, client)[0][1]
+                            root.mkdir(parents=True, exist_ok=True)
+                            path = root / integration._FILENAMES[client][-1]
+                            text = "Before" + newline + render(legacy, scope, newline, client) + newline + "After" + newline
+                            path.write_bytes(text.encode())
+                            self.assertEqual(integration.active_skills(scope, repo, client)[scope], expected)
+                            upgrade, = integration.plan_instruction_upgrades(scope, repo, client)
+                            self.assertEqual(upgrade.action, "Upgrade")
+                            integration.write_instruction_updates([upgrade], client)
+                            updated = path.read_bytes().decode()
+                            self.assertTrue(updated.startswith("Before" + newline))
+                            self.assertTrue(updated.endswith(newline + "After" + newline))
+                            self.assertNotIn("Simple or Agent", updated)
+                            self.assertNotIn("CodeGraph", updated)
+                            self.assertIn(integration._block(expected, scope, newline, client), updated)
+                            if newline == "\r\n":
+                                self.assertNotIn("\n", updated.replace("\r\n", ""))
+                            self.assertEqual(integration.plan_instruction_upgrades(scope, repo, client), [])
+                            self.assertEqual(integration.plan_instruction_updates(scope, repo, expected, client)[0].action, "Already current")
+                            path.unlink()
 
-    def test_mode_gate_upgrade_preserves_old_managed_blocks_and_user_text(self):
-        for client in ("codex", "claude"):
-            with self.subTest(client=client):
-                old = integration._previous_block(["getonmylevel-engineering"], "user", "\n", client)
-                original = ("Before\n" + old + "\nAfter\n").encode()
-                updated, action = integration._updated_bytes(original, "user", ["getonmylevel-engineering"], client)
-                self.assertEqual(action, "Update")
-                self.assertIn(b"Record the actual answer for this request", updated)
-                self.assertTrue(updated.startswith(b"Before\n"))
-                self.assertTrue(updated.endswith(b"\nAfter\n"))
-                self.assertEqual(integration._updated_bytes(updated, "user", ["getonmylevel-engineering"], client)[1], "Already current")
-                removed, action = integration._updated_bytes(updated, "user", [], client)
-                self.assertEqual((removed, action), (b"Before\n\nAfter\n", "Remove"))
+    def test_legacy_block_with_only_retired_skills_is_removed_on_upgrade(self):
+        path = self.codex / "AGENTS.md"
+        original = "Before\n" + legacy_blocks.gated_block(["getonmylevel-communication"], "user", "\n") + "\nAfter\n"
+        path.write_text(original, encoding="utf-8")
+        self.assertEqual(integration.active_skills("user", None), {"user": []})
+        plan, = integration.plan_instruction_upgrades("user", None)
+        self.assertEqual(plan.action, "Remove")
+        integration.write_instruction_updates([plan])
+        self.assertEqual(path.read_text(encoding="utf-8"), "Before\nAfter\n")
+        path.write_text(original, encoding="utf-8")
+        removal, = integration.plan_instruction_removals("user", None)
+        integration.write_instruction_removals([removal])
+        self.assertEqual(path.read_text(encoding="utf-8"), "Before\nAfter\n")
+
+    def test_upgrade_keeps_only_skills_that_will_be_installed(self):
+        path = self.codex / "AGENTS.md"
+        path.write_text(legacy_blocks.gated_block(["getonmylevel-context", "getonmylevel-design"], "user", "\n") + "\n", encoding="utf-8")
+        plan, = integration.plan_instruction_upgrades("user", None, available={"getonmylevel-context"})
+        self.assertIn(b"getonmylevel-context/SKILL.md", plan.proposed)
+        self.assertNotIn(b"getonmylevel-ui-check", plan.proposed)
+
+    def test_edited_legacy_block_is_refused(self):
+        path = self.codex / "AGENTS.md"
+        text = legacy_blocks.gated_block(["getonmylevel-engineering"], "user", "\n").replace("Simple means", "Simple MEANS")
+        path.write_text(text, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "edited or is malformed"):
+            integration.plan_instruction_upgrades("user", None)
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
 
     def test_activation_scope_and_missing_files(self):
         import skill_operations
-        design, engineering = "getonmylevel-design", "getonmylevel-engineering"
+        verify, context = "getonmylevel-verify", "getonmylevel-context"
         with mock.patch.dict(os.environ, {"CODEX_HOME": str(self.codex), "HOME": str(self.root), "USERPROFILE": str(self.root)}), mock.patch.object(common, "skill_roots", side_effect=lambda scope, repo, client: [self.root / scope / "skills"]):
             user = self.root / "user" / "skills"
-            (user / engineering).mkdir(parents=True)
-            (user / engineering / "SKILL.md").write_bytes(b"unchanged")
-            copies, plans = skill_operations.plan_activation({"user": [design], "repo": [engineering]}, self.repo, "codex")
-            self.assertEqual({c.destination.name for c in copies}, {design, engineering})
+            (user / context).mkdir(parents=True)
+            (user / context / "SKILL.md").write_bytes(b"unchanged")
+            copies, plans = skill_operations.plan_activation({"user": [verify], "repo": [context]}, self.repo, "codex")
+            self.assertEqual({c.destination.name for c in copies}, {verify, context})
             self.assertEqual(len(plans), 2)
             skill_operations.perform_install(copies, plans)
-            self.assertEqual((user / engineering / "SKILL.md").read_bytes(), b"unchanged")
-            self.assertEqual(integration.active_skills("both", self.repo), {"user": [design], "repo": [engineering]})
-            copies, plans = skill_operations.plan_activation({"user": [design], "repo": [engineering]}, self.repo, "codex")
+            self.assertEqual((user / context / "SKILL.md").read_bytes(), b"unchanged")
+            self.assertEqual(integration.active_skills("both", self.repo), {"user": [verify], "repo": [context]})
+            copies, plans = skill_operations.plan_activation({"user": [verify], "repo": [context]}, self.repo, "codex")
             self.assertEqual(copies, [])
             self.assertTrue(all(p.action == "Already current" for p in plans))
 
-    def test_previous_managed_blocks_upgrade_and_remain_removable_for_clients_and_scopes(self):
-        claude = self.root / "claude"
-        claude.mkdir()
-        for client in ("codex", "claude"):
-            for scope in ("user", "repo"):
-                with self.subTest(client=client, scope=scope):
-                    env_name = "CLAUDE_CONFIG_DIR" if client == "claude" else "CODEX_HOME"
-                    user_root = claude if client == "claude" else self.codex
-                    root = user_root if scope == "user" else self.repo
-                    filename = "CLAUDE.md" if client == "claude" else "AGENTS.md"
-                    path = root / filename
-                    with mock.patch.dict(os.environ, {env_name: str(user_root)}):
-                        path.write_text("Before\n" + integration._previous_block(SKILLS[:1], scope, "\n", client) + "\nAfter\n", encoding="utf-8")
-                        plan, = integration.plan_instruction_updates(scope, self.repo if scope == "repo" else None, SKILLS[:1], client)
-                        self.assertEqual(plan.action, "Update")
-                        integration.write_instruction_updates([plan], client)
-                        updated = path.read_text(encoding="utf-8")
-                        self.assertNotIn("straightforward software changes directly", updated)
-                        self.assertTrue(updated.startswith("Before\n"))
-                        self.assertTrue(updated.endswith("\nAfter\n"))
-                        self.assertEqual(integration.plan_instruction_updates(scope, self.repo if scope == "repo" else None, SKILLS[:1], client)[0].action, "Already current")
-                        removal, = integration.plan_instruction_removals(scope, self.repo if scope == "repo" else None, client)
-                        integration.write_instruction_removals([removal], client)
-                        self.assertEqual(path.read_text(encoding="utf-8"), "Before\nAfter\n")
+    def test_install_retires_old_skills_and_upgrades_their_block(self):
+        import skill_operations
+        user = self.root / "user" / "skills"
+        old = user / "getonmylevel-engineering"
+        old.mkdir(parents=True)
+        (old / "SKILL.md").write_text("always ask Simple or Agentic", encoding="utf-8")
+        agents = self.codex / "AGENTS.md"
+        agents.write_text("Mine\n" + legacy_blocks.gated_block(["getonmylevel-engineering", "getonmylevel-communication"], "user", "\n") + "\n", encoding="utf-8")
+        with mock.patch.object(common, "skill_roots", side_effect=lambda scope, repo, client: [self.root / scope / "skills"]):
+            _roots, copies, plans = skill_operations.plan_install(["getonmylevel-verify"], "user", None, "codex")
+            self.assertEqual([type(p).__name__ for p in plans], ["RetiredSkill", "InstructionUpdate"])
+            result, written = skill_operations.perform_install(copies, plans, "codex")
+        self.assertFalse(old.exists())
+        self.assertEqual(len(result.backups), 1)
+        self.assertTrue((Path(result.backups[0]) / "getonmylevel-engineering" / "SKILL.md").is_file())
+        self.assertEqual(written, [agents])
+        self.assertEqual(agents.read_text(encoding="utf-8"), "Mine\n" + integration._block(["getonmylevel-verify"], "user", "\n") + "\n")
+        self.assertTrue((user / "getonmylevel-verify" / "scripts" / "find_checks.py").is_file())
 
-    def test_older_legacy_managed_block_upgrades(self):
-        path = self.codex / "AGENTS.md"
-        path.write_text(integration._legacy_block(SKILLS[:1], "user", "\n"), encoding="utf-8")
-        plan, = integration.plan_instruction_updates("user", None, SKILLS[:1])
-        self.assertEqual(plan.action, "Update")
-        integration.write_instruction_updates([plan])
-        self.assertNotIn("straightforward software changes directly", path.read_text(encoding="utf-8"))
-
-    def test_legacy_claude_block_upgrades(self):
-        claude = self.root / "claude"
-        claude.mkdir()
-        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude)}):
-            path = claude / "CLAUDE.md"
-            path.write_text(integration._previous_block(SKILLS[:1], "user", "\n", "claude"), encoding="utf-8")
-            plan, = integration.plan_instruction_updates("user", None, SKILLS[:1], "claude")
-            self.assertEqual(plan.action, "Update")
-            integration.write_instruction_updates([plan], "claude")
-            self.assertNotIn("straightforward software changes directly", path.read_text(encoding="utf-8"))
-
-    def test_clipboard_selector_requires_mode_choice_and_keeps_review_choices(self):
-        class Clipboard:
-            def __init__(self):
-                self.value = ""
-
-            def clipboard_clear(self):
-                pass
-
-            def clipboard_append(self, value):
-                self.value = value
-
-        gui = agents_gui.AgentConfigurator.__new__(agents_gui.AgentConfigurator)
-        gui.preference = mock.Mock()
-        gui.preference.get.return_value = "Ask"
-        gui.root = Clipboard()
-        with mock.patch.object(agents_gui.messagebox, "showinfo"):
-            gui.copy_selector()
-        copied = gui.root.value.casefold()
-        for phrase in ("always prompt the user to choose Simple or Agentic mode", "before editing or delegating", "independent reviewer and an independent tester",
-                       "Read-only investigation may continue", "Record the actual answer for this request",
-                       "each is disabled unless selected",
-                       "wait for the actual answer to every choice"):
-            self.assertIn(phrase.casefold(), copied)
-        self.assertIn("do not silently switch modes", copied)
+    def test_bundled_skills_are_compact_and_discoverable(self):
+        for name in SKILLS:
+            with self.subTest(skill=name):
+                folder = ROOT / "skills" / name
+                text = (folder / "SKILL.md").read_text(encoding="utf-8")
+                front, body = text.split("---\n", 2)[1:]
+                self.assertIn(f"name: {name}\n", front)
+                description = front.split("description: ", 1)[1].strip()
+                self.assertIn("Use ", description)
+                self.assertLess(len(body.split()), 450)
+                self.assertNotIn("Simple or Agentic", text)
+                self.assertFalse((folder / "agents" / "openai.yaml").exists(), "implicit invocation must stay enabled")
+        self.assertEqual(sorted(p.name for p in (ROOT / "skills").iterdir()), sorted(SKILLS))
 
     def test_claude_agent_preview_runs_planner_validation(self):
         class Preview:
@@ -264,16 +262,6 @@ class InstructionIntegrationTests(unittest.TestCase):
         gui.plan.assert_called_once_with()
         self.assertIn("Unsupported Claude Code effort 'ultracode'", gui.preview.text)
 
-    def test_readme_explains_instruction_level_limit(self):
-        readme = (ROOT / "README.md").read_text(encoding="utf-8").casefold()
-        self.assertIn("cannot intercept client tool calls", readme)
-        self.assertIn("cannot guarantee that a choice was presented or recorded", readme)
-
-    def test_discovery_policy_stays_in_skill(self):
-        plan, = integration.plan_instruction_updates("user", None, ["getonmylevel-skill-discovery"])
-        self.assertNotIn(b"review the available skills", plan.proposed)
-        self.assertIn(b"getonmylevel-skill-discovery/SKILL.md", plan.proposed)
-
     def test_preserves_bom_crlf_and_text_around_block(self):
         path = self.codex / "AGENTS.md"
         original = b"\xef\xbb\xbf# Intro\r\nKeep me\r\n"
@@ -296,6 +284,7 @@ class InstructionIntegrationTests(unittest.TestCase):
             "<!-- getonmylevel-skills:end -->\n<!-- getonmylevel-skills:begin -->",
             "<!-- getonmylevel-skills:begin -->\nmanual edit\n<!-- getonmylevel-skills:end -->",
             "<!-- getonmylevel-skills:begin -->\n## getonmylevel skills\n\nBy default, at the start of each conversation, read the following installed skill instructions and follow them as relevant to the task:\n- `~/.agents/skills/unknown/SKILL.md`\n\nHonor explicit user changes to this preference and higher-priority instructions.\n<!-- getonmylevel-skills:end -->",
+            integration._block([SKILLS[0]], "user", "\n").replace("Read a skill", "Always read a skill"),
         ]
         for text in invalid_blocks:
             path.write_text(text, encoding="utf-8")
@@ -514,7 +503,7 @@ class InstructionIntegrationTests(unittest.TestCase):
              mock.patch.object(install_gui.messagebox, "showinfo") as completed, \
              mock.patch.object(install_gui, "perform_install", return_value=(None, [self.codex / "AGENTS.md"])) as apply:
             installer.apply_activation()
-        self.assertIn("activate getonmylevel-communication", confirm.call_args.args[1])
+        self.assertIn(f"activate {SKILLS[0]}", confirm.call_args.args[1])
         self.assertIn("Installed skill files remain available on request", confirm.call_args.args[1])
         self.assertIn("Active by default now", completed.call_args.args[1])
         self.assertIn(SKILLS[0], completed.call_args.args[1])
@@ -561,7 +550,7 @@ class InstructionIntegrationTests(unittest.TestCase):
         self.assertIn("Required installation (available on request): destination", installer.preview.value)
         self.assertIn("does not activate skills by default", installer.preview.value)
 
-        installer.selections = mock.Mock(return_value=([SKILLS[0]], [], [operation], [instruction], None))
+        installer.selections = mock.Mock(return_value=([SKILLS[0]], [], [operation], [instruction]))
         with mock.patch.object(install_gui.messagebox, "askyesno", return_value=False) as confirm, \
              mock.patch.object(install_gui, "perform_install") as perform:
             installer.install()
@@ -673,27 +662,35 @@ class OpenCodeInstructionTests(unittest.TestCase):
         self.assertEqual(plan.proposed, codex_only.encode("utf-8"))
 
     def test_legacy_codex_blocks_upgrade_to_shared_block(self):
-        renderers = (integration._legacy_block, integration._previous_block, integration._current_block,
-                     integration._prior_block, integration._delegation_block, integration._previous_agentic_block,
-                     integration._previous_block_with_mode_gate)
-        for renderer in renderers:
-            with self.subTest(renderer=renderer.__name__):
-                self.write("Intro\n" + renderer(self.codex_names, "repo", "\n", "codex") + "\n")
+        legacy = ["getonmylevel-communication", "getonmylevel-engineering"]
+        for index, renderer in enumerate(legacy_blocks.RENDERERS):
+            with self.subTest(renderer=index):
+                self.write("Intro\n" + renderer(legacy, "repo", "\n", "codex") + "\n")
                 plan = integration.plan_instruction_updates("repo", self.repo, self.opencode_names, "opencode")[0]
                 self.assertEqual(plan.action, "Update")
                 integration.write_instruction_updates([plan], "opencode")
-                self.assertEqual(self.read(), "Intro\n" + integration._shared_block(self.codex_names, self.opencode_names, "\n") + "\n")
+                migrated = ["getonmylevel-verify"]
+                self.assertEqual(self.read(), "Intro\n" + integration._shared_block(migrated, self.opencode_names, "\n") + "\n")
                 self.activate("repo", [], "opencode")
-                self.assertEqual(self.read(), "Intro\n" + integration._block(self.codex_names, "repo", "\n", "codex") + "\n")
+                self.assertEqual(self.read(), "Intro\n" + integration._block(migrated, "repo", "\n", "codex") + "\n")
+
+    def test_legacy_shared_block_migrates_both_lists(self):
+        old = legacy_blocks.shared_block(["getonmylevel-engineering"], ["getonmylevel-design", "getonmylevel-context"], "\n")
+        self.write("Intro\n" + old + "\n")
+        self.assertEqual(integration.active_skills("repo", self.repo, "opencode"), {"repo": ["getonmylevel-ui-check", "getonmylevel-context"]})
+        plan, = integration.plan_instruction_upgrades("repo", self.repo, "codex")
+        integration.write_instruction_updates([plan], "codex")
+        self.assertEqual(self.read(), "Intro\n" + integration._shared_block(
+            ["getonmylevel-verify"], ["getonmylevel-ui-check", "getonmylevel-context"], "\n") + "\n")
 
     def test_edited_shared_blocks_are_refused_and_left_unchanged(self):
         communication, context = common.SKILL_NAMES[0], common.SKILL_NAMES[1]
         shared = integration._shared_block([communication], [context], "\n")
         edits = {
             "label": shared.replace("\nCodex:\n", "\nCodex list:\n"),
-            "order": shared.replace(f"Codex:\n- `.agents/skills/{communication}/SKILL.md`\n\nOpenCode:\n- `.opencode/skills/{context}/SKILL.md`",
-                                    f"OpenCode:\n- `.opencode/skills/{context}/SKILL.md`\n\nCodex:\n- `.agents/skills/{communication}/SKILL.md`"),
-            "scope": shared.replace("These paths are relative", f"- `.claude/skills/{communication}/SKILL.md`\nThese paths are relative"),
+            "order": shared.replace("\nCodex:\n", "\n@\n").replace("\nOpenCode:\n", "\nCodex:\n").replace("\n@\n", "\nOpenCode:\n"),
+            "trigger": shared.replace(integration.SKILL_TRIGGERS[communication], "whenever you like"),
+            "scope": shared.replace("Paths are relative", f"- `.claude/skills/{communication}/SKILL.md`\nPaths are relative"),
         }
         for label, edited in edits.items():
             for client in ("codex", "opencode"):

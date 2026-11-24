@@ -1,14 +1,22 @@
 ---
 name: getonmylevel-context
-description: Find relevant project context efficiently and maintain a small, local architecture summary when it has recurring value. Use when explicitly selected or invoked.
+description: Navigates code where plain search is unreliable, such as finding every caller of a symbol across packages, and checks the installed version of a dependency before relying on its API. Use when a change touches shared behavior used in several packages, or when an API's behavior depends on the installed version. Not needed for small, local edits.
 ---
 
-# Context and navigation
+# Hard navigation and version-specific APIs
 
-Whenever a task requires repository context, check whether the repository has a CodeGraph index. If indexed, use CodeGraph for relevant code exploration when available; fall back to targeted search and reads if it is unavailable or insufficient. If the project is not indexed, always tell the user and ask whether they want CodeGraph indexing to improve context navigation. Do not install CodeGraph or initialize an index without the user?s authorization. Continue independent work using available search and read tools while the choice is pending, and respect the user?s answer and higher-priority instructions. CodeGraph is independently selectable in the GUI installer for Codex and Claude Code.
+## Callers across packages
 
-Indexes and summaries are navigation aids. They can be stale, incomplete, or wrong. Inspect authoritative source for implementation, correctness, and consequential decisions. Do not invent undocumented behavior. Respect repository instructions, permissions, and ignore rules. Exclude secrets, generated files, and irrelevant content.
+1. If the session already has a code index (a language server, an IDE index, or a code-search tool), ask it for references to the symbol.
+2. Otherwise search for the symbol name, including re-exports, aliases, string-based lookups (registries, dependency injection, reflection), and generated code.
+3. Open each call site before changing the shared behavior. Treat index results as leads: confirm them in the source.
 
-For choosing tools, read [context-tools.md](references/context-tools.md). For initializing or maintaining a local summary, read [local-summary.md](references/local-summary.md). Keep summaries local and maintenance proportional to their value. After a material change to architecture, responsibilities, key symbols, or relationships, update affected records incrementally when a summary exists. Handle additions, renames, and deletions. If freshness cannot be established, mark affected information stale and report the limitation. Routine edits do not justify a broad refresh.
+Don't create or initialize an index, and don't offer one, unless the user asks.
 
-Suggest practical ways to reduce repeated context work, such as scoped queries, batching independent searches, reusing returned source, and progressive disclosure. Do not promise token savings. Measure representative tasks only when authorized and feasible, and describe the workload, observed costs, and limitations.
+## Version-specific APIs
+
+1. Read the installed version from the lockfile (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `poetry.lock`, `uv.lock`, `Cargo.lock`, `go.sum`) or the environment, not from memory.
+2. Read the documentation or type definitions that ship with that version: `node_modules/<pkg>`, the package's `.d.ts` files, `site-packages/<pkg>`, or docs in the repository. Use a version-matched web page only if nothing local exists.
+3. If the API you planned to use is not in that version, say so and use what the installed version provides.
+
+Don't upgrade a dependency to get a newer API unless the user asks.

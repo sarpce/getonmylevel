@@ -1,14 +1,16 @@
-"""Plan and write managed Codex instructions that activate installed skills by default."""
+"""Plan and write the managed instruction block that indexes installed skills."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 
 import common
+import legacy_blocks
 
 
 BEGIN = "<!-- getonmylevel-skills:begin -->"
@@ -18,9 +20,19 @@ _SKILL_FOLDERS = {"claude": ".claude", "codex": ".agents", "copilot": ".github",
 _FILENAMES = {"claude": ("CLAUDE.md",), "copilot": ("copilot-instructions.md",),
               "codex": ("AGENTS.override.md", "AGENTS.md"), "opencode": ("AGENTS.md",)}
 _SHARED_REPO_CLIENTS = ("codex", "opencode")
-_INTRO = "By default, at the start of each conversation, read the following installed skill instructions and follow them as relevant to the task"
-_SHARED_NOTE = "Codex and OpenCode share this block: use only the list for the client you are running in."
-_ROLE_SENTENCE = "Claude Code uses the corresponding hyphenated names."
+
+# The managed block is an index, not a policy: one line per active skill saying
+# when to read it. Skill bodies load only when their step comes up, and the
+# block stays byte-stable between sessions so prompt caches stay warm.
+_INTRO = "These installed skills are procedures for specific steps. Read a skill when you reach its step"
+_SHARED_NOTE = "Codex and OpenCode share this block: use the list for the client you are running in."
+_REPO_NOTE = "Paths are relative to the repository root."
+SKILL_TRIGGERS = {
+    "getonmylevel-verify": "before finishing a code change, and when fixing a bug",
+    "getonmylevel-ui-check": "after changing an interface that renders in a browser or app window",
+    "getonmylevel-context": "when finding callers across packages, or using an API that depends on the installed version",
+}
+_ENTRY = re.compile(r"- `(?P<path>[^`]+)/SKILL\.md`(?:: .*)?")
 
 
 def _user_skill_root(client: str) -> str:
@@ -29,6 +41,10 @@ def _user_skill_root(client: str) -> str:
     if client == "copilot":
         return "~/.copilot"
     return "~/.config/opencode" if client == "opencode" else "~/.agents"
+
+
+def _prefix(kind: str, client: str) -> str:
+    return f"{_user_skill_root(client)}/skills/" if kind == "user" else f"{_SKILL_FOLDERS[client]}/skills/"
 
 
 @dataclass(frozen=True)
@@ -104,124 +120,31 @@ def _read_optional(path: Path) -> bytes | None:
         return None
 
 
-def _current_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
-    if client not in common.CLIENTS:
-        raise ValueError(f"Unknown client: {client}")
-    folder = _SKILL_FOLDERS[client]
-    if kind == "user":
-        user_root = _user_skill_root(client)
-        paths = [f"{user_root}/skills/{name}/SKILL.md" for name in names]
-        location_note = ""
-    else:
-        paths = [f"{folder}/skills/{name}/SKILL.md" for name in names]
-        location_note = "These paths are relative to the repository root.\n"
-    lines = [BEGIN, "## getonmylevel skills", "",
-             "By default, at the start of each conversation, read the following installed skill instructions and follow them as relevant to the task:",
-             *[f"- `{path}`" for path in paths],
-             "", location_note.rstrip("\n") if location_note else None,
-             (("For each task, review the available skills and relevant skill locations (including `.agents/skills`, `.codex/skills`, and `.skills` where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions." if client == "codex" else f"For each task, review the available skills and relevant skill locations (including `{folder}/skills`, `.skills`, and client-specific locations where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions.") if "getonmylevel-skill-discovery" in names else None),
-             "Handle straightforward software changes directly without asking for a workflow choice. Use agent-based work when explicitly requested or useful under the active session's delegation rules. Preserve user control over independent review and testing: ask separately when relevant, and keep each disabled unless selected. Wait for actual answers to those choices before dependent work. Respect user preferences and higher-priority session instructions.",
-             "Honor explicit user changes to this preference and higher-priority instructions.", END]
-    return newline.join(line for line in lines if line is not None)
-
-
-def _prior_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
-    old = _legacy_block(names, kind, newline, client)
-    lines = old.split(newline)
-    return newline.join(line for line in lines if not line.startswith("For each task,")
-                        and not line.startswith("Honor explicit user changes"))
-
-
-def _delegation_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
-    block = _prior_block(names, kind, newline, client)
-    if "getonmylevel-engineering" in names:
-        request = ("When the engineering skill applies, I request agent delegation for Agentic mode. "
-                   "Follow the skill's mode selection and review and testing choices, and respect "
-                   "higher-priority instructions and available tools.")
-        block = block.replace(END, request + newline + END)
-    return block
-
-
-def _previous_agentic_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
-    block = _prior_block(names, kind, newline, client)
-    if "getonmylevel-engineering" in names:
-        request = ("## Agentic mode" + newline + newline +
-                   "To enable Agentic mode for a software task, choose Agentic when prompted or "
-                   "request it directly. I request delegation to sub-agents when Agentic mode is "
-                   "selected. Follow the engineering skill's mode selection and review and testing "
-                   "choices, subject to higher-priority instructions and available tools.")
-        block = block.replace(END, request + newline + END)
-    return block
+def _entries(prefix: str, names: list[str]) -> list[str]:
+    return [f"- `{prefix}{name}/SKILL.md`: {SKILL_TRIGGERS[name]}" for name in names]
 
 
 def _block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
-    block = _previous_agentic_block(names, kind, newline, client)
-    if {"getonmylevel-communication", "getonmylevel-engineering", "getonmylevel-good-software-engineering-practices"}.intersection(names):
-        mode_gate = ("For every new request involving any software or code edit, including fixes, tests, configuration, documentation, and skill instructions, always prompt the user to choose Simple or Agentic mode before editing or delegating, regardless of size or any choice made for an earlier request. Read-only investigation may continue while the answer is pending. Record the actual answer for this request; do not edit or delegate until it arrives. Simple means working directly. Agentic mode uses only the installed getonmylevel agent roles configured for the active client: getonmylevel_designer and getonmylevel_implementer, plus getonmylevel_reviewer and getonmylevel_tester only when the user opts into those roles. Claude Code uses the corresponding hyphenated names. Set each spawned agent's type to its installed getonmylevel role. A task-specific spawn name or identifier may be chosen freely; it does not change the required agent type. If a required configured role is unavailable, explain which role is missing and ask the user how to proceed. Ask separately whether the user wants an independent reviewer and an independent tester; each is disabled unless selected. Wait for the actual answer to every choice before assigning roles or doing dependent work. A default, timeout, or elapsed time is not an answer. Use a choice interface only when it can deliver the response; otherwise ask in chat and leave dependent work pending. If Agentic mode is unavailable or disallowed, explain why and ask how to proceed instead of silently switching modes. Respect higher-priority instructions.")
-        block = block.replace(END, mode_gate + newline + END)
-    if client == "copilot":
-        block = block.replace("Claude Code uses the corresponding hyphenated names.",
-                              "Claude Code and GitHub Copilot use the corresponding hyphenated names.")
-    if client == "opencode":
-        block = block.replace(_ROLE_SENTENCE, "Claude Code, GitHub Copilot, and OpenCode use the corresponding hyphenated names.")
-    return _add_context_guidance(block, newline)
-
-
-def _previous_block_with_mode_gate(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
-    """Render the immediately previous managed template for migration compatibility."""
-    block = _previous_agentic_block(names, kind, newline, client)
-    if {"getonmylevel-communication", "getonmylevel-engineering", "getonmylevel-good-software-engineering-practices"}.intersection(names):
-        mode_gate = ("For every new request involving any software or code edit, including fixes, tests, configuration, documentation, and skill instructions, always prompt the user to choose Simple or Agentic mode before editing or delegating, regardless of size or any choice made for an earlier request. Read-only investigation may continue while the answer is pending. Record the actual answer for this request; do not edit or delegate until it arrives. Simple means working directly; Agentic means using agents subject to the active session's delegation rules. In Agentic mode, ask separately whether the user wants an independent reviewer and an independent tester; each is disabled unless selected. Wait for the actual answer to every choice before assigning roles or doing dependent work. A default, timeout, or elapsed time is not an answer. Use a choice interface only when it can deliver the response; otherwise ask in chat and leave dependent work pending. If Agentic mode is unavailable or disallowed, explain why and ask how to proceed instead of silently switching modes. Respect higher-priority instructions.")
-        block = block.replace(END, mode_gate + newline + END)
-    return _add_context_guidance(block, newline)
-
-
-def _add_context_guidance(block: str, newline: str) -> str:
-    guidance = ("## CodeGraph project context" + newline + newline +
-                "Whenever a task requires repository context, check whether the repository has a CodeGraph index. "
-                "If it does, use the index for relevant code exploration when available, and fall back to other tools if unavailable or insufficient. "
-                "If it does not, always inform the user that the project is not indexed and ask whether they want CodeGraph indexing to improve context navigation. "
-                "Do not install CodeGraph or initialize an index without the user's authorization. Continue independent work using available search and reads while the choice is pending; respect the user's answer and higher-priority instructions.")
-    return block.replace(END, guidance + newline + END)
-
-
-def _previous_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
     if client not in common.CLIENTS:
         raise ValueError(f"Unknown client: {client}")
-    folder = _SKILL_FOLDERS[client]
-    if kind == "user":
-        user_root = _user_skill_root(client)
-        paths = [f"{user_root}/skills/{name}/SKILL.md" for name in names]
-        location_note = ""
-    else:
-        paths = [f"{folder}/skills/{name}/SKILL.md" for name in names]
-        location_note = "These paths are relative to the repository root.\n"
-    lines = [BEGIN, "## getonmylevel skills", "",
-             "By default, at the start of each conversation, read the following installed skill instructions and follow them as relevant to the task:",
-             *[f"- `{path}`" for path in paths],
-             "", location_note.rstrip("\n") if location_note else None,
-             (("For each task, review the available skills and relevant skill locations (including `.agents/skills`, `.codex/skills`, and `.skills` where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions." if client == "codex" else f"For each task, review the available skills and relevant skill locations (including `{folder}/skills`, `.skills`, and client-specific locations where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions.") if "getonmylevel-skill-discovery" in names else None),
-             "For every new request involving any software edit, including small fixes, tests, configuration, documentation, or skills, ask the user to choose Simple or Agent-based before editing or delegating unless they explicitly chose a mode for that request. Ask again for each new request. In Agent-based mode, ask separately whether to use an independent reviewer and tester; keep each disabled unless selected. When a multiple-choice popup is available and can deliver the response, use it and wait for the user's actual answer. Never treat a preselected option, timeout, or elapsed time as an answer. If no usable popup exists, ask in chat and leave dependent work pending until the user answers. Respect higher-priority session instructions and explain if they prevent a mode from being used.",
-             "Honor explicit user changes to this preference and higher-priority instructions.", END]
-    return newline.join(line for line in lines if line is not None)
+    lines = [BEGIN, "## getonmylevel skills", "", _INTRO + ":", *_entries(_prefix(kind, client), names)]
+    if kind != "user":
+        lines.append(_REPO_NOTE)
+    lines.append(END)
+    return newline.join(lines)
 
 
-def _legacy_block(names: list[str], kind: str, newline: str, client: str = "codex") -> str:
-    """Render the older legacy template for migration compatibility."""
-    folder = _SKILL_FOLDERS[client]
-    if kind == "user":
-        user_root = _user_skill_root(client)
-        paths = [f"{user_root}/skills/{name}/SKILL.md" for name in names]
-        location_note = ""
-    else:
-        paths = [f"{folder}/skills/{name}/SKILL.md" for name in names]
-        location_note = "These paths are relative to the repository root.\n"
-    lines = [BEGIN, "## getonmylevel skills", "",
-             "By default, at the start of each conversation, read the following installed skill instructions and follow them as relevant to the task:",
-             *[f"- `{path}`" for path in paths], "", location_note.rstrip("\n") if location_note else None,
-             (("For each task, review the available skills and relevant skill locations (including `.agents/skills`, `.codex/skills`, and `.skills` where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions." if client == "codex" else f"For each task, review the available skills and relevant skill locations (including `{folder}/skills`, `.skills`, and client-specific locations where present). Use skills when they could materially help, and read their instructions before applying them. Honor explicit user preferences and higher-priority instructions.") if "getonmylevel-skill-discovery" in names else None),
-             "Honor explicit user changes to this preference and higher-priority instructions.", END]
-    return newline.join(line for line in lines if line is not None)
+def _shared_block(codex: list[str], opencode: list[str], newline: str) -> str | None:
+    """Render the repository block; Codex and OpenCode lists share one managed block."""
+    if not codex and not opencode:
+        return None
+    if not opencode:
+        return _block(codex, "repo", newline, "codex")
+    if not codex:
+        return _block(opencode, "repo", newline, "opencode")
+    return newline.join([BEGIN, "## getonmylevel skills", "", _INTRO + ". " + _SHARED_NOTE, "",
+                         "Codex:", *_entries(".agents/skills/", codex), "",
+                         "OpenCode:", *_entries(".opencode/skills/", opencode), _REPO_NOTE, END])
 
 
 def _scan_block(text: str, newline: str, prefixes: dict[str, str]) -> tuple[str, dict[str, list[str]]] | None:
@@ -233,90 +156,70 @@ def _scan_block(text: str, newline: str, prefixes: dict[str, str]) -> tuple[str,
     finish = text.index(END)
     if finish < start:
         raise ValueError("Managed skill instruction markers are reversed; repair or remove the getonmylevel block manually.")
-    end_after = finish + len(END)
-    body = text[start:end_after]
+    body = text[start:finish + len(END)]
     lists: dict[str, list[str]] = {client: [] for client in prefixes}
-    suffix = "/SKILL.md`"
+    known = set(common.SKILL_NAMES) | set(common.LEGACY_SKILL_NAMES)
     for line in body.split(newline):
-        if line.startswith("- `") and line.endswith(suffix):
-            path = line[3:-1]
-            matches = [client for client, prefix in prefixes.items() if path.startswith(prefix)]
-            if not matches:
-                raise ValueError("Managed skill instruction block has paths for a different scope; repair or remove it manually.")
-            client = matches[0]
-            name = path[len(prefixes[client]):-len("/SKILL.md")]
-            if name not in common.SKILL_NAMES or name in lists[client]:
-                raise ValueError(f"Managed skill instruction block has an unknown or duplicate skill: {name!r}.")
-            lists[client].append(name)
+        match = _ENTRY.fullmatch(line)
+        if not match:
+            continue
+        path = match.group("path")
+        matches = [client for client, prefix in prefixes.items() if path.startswith(prefix)]
+        if not matches:
+            raise ValueError("Managed skill instruction block has paths for a different scope; repair or remove it manually.")
+        client = matches[0]
+        name = path[len(prefixes[client]):]
+        if name not in known or name in lists[client]:
+            raise ValueError(f"Managed skill instruction block has an unknown or duplicate skill: {name!r}.")
+        lists[client].append(name)
     return body, lists
 
 
-def _candidates(names: list[str], kind: str, newline: str, client: str) -> tuple[str, ...]:
-    if client == "opencode":
-        return (_block(names, kind, newline, client),)
-    return (_block(names, kind, newline, client), _previous_block_with_mode_gate(names, kind, newline, client),
-            _add_context_guidance(_previous_agentic_block(names, kind, newline, client), newline),
-            _previous_agentic_block(names, kind, newline, client), _delegation_block(names, kind, newline, client),
-            _prior_block(names, kind, newline, client), _current_block(names, kind, newline, client),
-            _previous_block(names, kind, newline, client), _legacy_block(names, kind, newline, client))
+_MALFORMED = "Managed skill instruction block was edited or is malformed; repair or remove it manually."
 
 
-def _parse_block(text: str, kind: str, newline: str, client: str = "codex") -> list[str] | None:
-    prefix = f"{_user_skill_root(client)}/skills/" if kind == "user" else f"{_SKILL_FOLDERS[client]}/skills/"
-    scanned = _scan_block(text, newline, {client: prefix})
+def _is_current(names: list[str]) -> bool:
+    return all(name in common.SKILL_NAMES for name in names)
+
+
+def _is_legacy(names: list[str]) -> bool:
+    return all(name in common.LEGACY_SKILL_NAMES for name in names)
+
+
+def _parse_lists(text: str, kind: str, newline: str, client: str) -> tuple[dict[str, list[str]], bool, dict[str, list[str]]] | None:
+    """Return the active lists (legacy names migrated), whether the block is current, and the raw lists.
+
+    An unedited block from an earlier release parses as stale so the next write
+    replaces it. Anything else between the markers is refused unchanged.
+    """
+    shared = kind == "repo" and client in _SHARED_REPO_CLIENTS
+    prefixes = {"codex": ".agents/skills/", "opencode": ".opencode/skills/"} if shared else {client: _prefix(kind, client)}
+    scanned = _scan_block(text, newline, prefixes)
     if scanned is None:
         return None
     body, lists = scanned
+    if shared:
+        codex, opencode = lists["codex"], lists["opencode"]
+        if (codex or opencode) and _is_current(codex + opencode) and body == _shared_block(codex, opencode, newline):
+            return lists, True, lists
+        if _is_legacy(codex + opencode):
+            if codex and opencode:
+                legacy = (legacy_blocks.shared_block(codex, opencode, newline),)
+            elif codex:
+                legacy = legacy_blocks.candidates(codex, "repo", newline, "codex")
+            elif opencode:
+                legacy = legacy_blocks.candidates(opencode, "repo", newline, "opencode")
+            else:
+                legacy = ()
+            if body in legacy:
+                return {name: common.migrate_skill_names(values) for name, values in lists.items()}, False, lists
+        raise ValueError(_MALFORMED)
     names = lists[client]
-    if not names or body not in _candidates(names, kind, newline, client):
-        raise ValueError("Managed skill instruction block was edited or is malformed; repair or remove it manually.")
-    return names
-
-
-def _shared_block(codex: list[str], opencode: list[str], newline: str) -> str | None:
-    """Render the repository block; Codex and OpenCode lists share one managed block."""
-    if not codex and not opencode:
-        return None
-    if not opencode:
-        return _block(codex, "repo", newline, "codex")
-    if not codex:
-        return _block(opencode, "repo", newline, "opencode")
-    union = [name for name in common.SKILL_NAMES if name in codex or name in opencode]
-    block = _block(union, "repo", newline, "opencode")
-    single = newline.join([_INTRO + ":", *[f"- `.opencode/skills/{name}/SKILL.md`" for name in union]])
-    shared = newline.join([_INTRO + ". " + _SHARED_NOTE, "", "Codex:",
-                           *[f"- `.agents/skills/{name}/SKILL.md`" for name in codex],
-                           "", "OpenCode:",
-                           *[f"- `.opencode/skills/{name}/SKILL.md`" for name in opencode]])
-    if block.count(single) != 1:
-        raise RuntimeError("Shared managed block template mismatch.")
-    return block.replace(single, shared)
-
-
-def _parse_shared_block(text: str, newline: str) -> dict[str, list[str]] | None:
-    scanned = _scan_block(text, newline, {"codex": ".agents/skills/", "opencode": ".opencode/skills/"})
-    if scanned is None:
-        return None
-    body, lists = scanned
-    codex, opencode = lists["codex"], lists["opencode"]
-    if codex and opencode:
-        candidates = (_shared_block(codex, opencode, newline),)
-    elif codex:
-        candidates = _candidates(codex, "repo", newline, "codex")
-    elif opencode:
-        candidates = (_block(opencode, "repo", newline, "opencode"),)
-    else:
-        candidates = ()
-    if body not in candidates:
-        raise ValueError("Managed skill instruction block was edited or is malformed; repair or remove it manually.")
-    return {"codex": codex, "opencode": opencode}
-
-
-def _parse_lists(text: str, kind: str, newline: str, client: str) -> dict[str, list[str]] | None:
-    if kind == "repo" and client in _SHARED_REPO_CLIENTS:
-        return _parse_shared_block(text, newline)
-    names = _parse_block(text, kind, newline, client)
-    return None if names is None else {client: names}
+    if names and _is_current(names) and body == _block(names, kind, newline, client):
+        return lists, True, lists
+    if names and _is_legacy(names) and body in legacy_blocks.candidates(names, kind, newline, client):
+        return {client: common.migrate_skill_names(names)}, False, lists
+    raise ValueError(_MALFORMED)
 
 
 def _render_lists(lists: dict[str, list[str]], kind: str, newline: str, client: str) -> str | None:
@@ -326,38 +229,49 @@ def _render_lists(lists: dict[str, list[str]], kind: str, newline: str, client: 
     return _block(names, kind, newline, client) if names else None
 
 
-def _updated_bytes(original: bytes | None, kind: str, selected: list[str], client: str = "codex") -> tuple[bytes, str]:
+def _decode(original: bytes | None) -> tuple[bytes, str, str]:
     bom = b"\xef\xbb\xbf" if original and original.startswith(b"\xef\xbb\xbf") else b""
     raw = original[len(bom):] if original else b""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("Instruction file must be valid UTF-8 to preserve it safely.") from exc
-    newline = "\r\n" if "\r\n" in text else "\n"
-    existing = _parse_lists(text, kind, newline, client)
-    own = (existing or {}).get(client, [])
+    return bom, text, "\r\n" if "\r\n" in text else "\n"
+
+
+def _replace_block(text: str, rendered: str | None, *, eat_newline: bool) -> str:
+    start, finish = text.index(BEGIN), text.index(END) + len(END)
+    if rendered is not None:
+        return text[:start] + rendered + text[finish:]
+    if eat_newline:
+        # Installation appends a newline after the managed block. Remove that
+        # one as part of the block while retaining all surrounding user text.
+        if text.startswith("\r\n", finish):
+            finish += 2
+        elif text.startswith("\n", finish):
+            finish += 1
+    return text[:start] + text[finish:]
+
+
+def _updated_bytes(original: bytes | None, kind: str, selected: list[str], client: str = "codex") -> tuple[bytes, str]:
+    bom, text, newline = _decode(original)
+    parsed = _parse_lists(text, kind, newline, client)
     names = [name for name in common.SKILL_NAMES if name in selected]
-    if not names:
-        if existing is None or not own:
+    if parsed is None:
+        if not names:
             return original or b"", "Already current"
-        start, finish = text.index(BEGIN), text.index(END) + len(END)
-        rendered = _render_lists({**existing, client: []}, kind, newline, client)
-        if rendered is not None:
-            return bom + (text[:start] + rendered + text[finish:]).encode("utf-8"), "Remove"
-        return bom + (text[:start] + text[finish:]).encode("utf-8"), "Remove"
-    block = _render_lists({**(existing or {}), client: names}, kind, newline, client)
-    if existing is not None:
-        start, finish = text.index(BEGIN), text.index(END) + len(END)
-        proposed_text = text[:start] + block + text[finish:]
-        if proposed_text == text:
-            return original or b"", "Already current"
-        return bom + proposed_text.encode("utf-8"), "Update"
-    if text:
-        separator = "" if text.endswith(("\n", "\r")) else newline
-        proposed_text = text + separator + block + newline
-    else:
-        proposed_text = block + newline
-    return bom + proposed_text.encode("utf-8"), "Create" if original is None else "Update"
+        if text:
+            separator = "" if text.endswith(("\n", "\r")) else newline
+            proposed_text = text + separator + _block(names, kind, newline, client) + newline
+        else:
+            proposed_text = _block(names, kind, newline, client) + newline
+        return bom + proposed_text.encode("utf-8"), "Create" if original is None else "Update"
+    existing = parsed[0]
+    rendered = _render_lists({**existing, client: names}, kind, newline, client)
+    proposed_text = _replace_block(text, rendered, eat_newline=False)
+    if proposed_text == text:
+        return original or b"", "Already current"
+    return bom + proposed_text.encode("utf-8"), "Remove" if not names else "Update"
 
 
 def plan_instruction_updates(scope: str, repo_root: Path | None, names: list[str], client: str = "codex") -> list[InstructionUpdate]:
@@ -371,63 +285,78 @@ def plan_instruction_updates(scope: str, repo_root: Path | None, names: list[str
     return plans
 
 
+def _read_text(path: Path) -> tuple[bytes, bytes, str, str]:
+    original = path.read_bytes()
+    bom, text, newline = _decode(original)
+    return original, bom, text, newline
+
+
 def active_skills(scope: str, repo_root: Path | None, client: str = "codex") -> dict[str, list[str]]:
     result = {}
     for kind, root in _instruction_roots(scope, repo_root, client):
         path = _instruction_path(root, client)
-        raw = _read_optional(path) or b""
-        try:
-            text = raw.decode("utf-8-sig")
-        except UnicodeDecodeError as exc:
-            raise ValueError("Instruction file must be valid UTF-8 to preserve it safely.") from exc
-        newline = "\r\n" if "\r\n" in text else "\n"
-        result[kind] = (_parse_lists(text, kind, newline, client) or {}).get(client, [])
+        _bom, text, newline = _decode(_read_optional(path))
+        parsed = _parse_lists(text, kind, newline, client)
+        result[kind] = parsed[0].get(client, []) if parsed else []
     return result
 
 
 def _removed_bytes(original: bytes, kind: str, client: str = "codex") -> bytes:
-    bom = b"\xef\xbb\xbf" if original.startswith(b"\xef\xbb\xbf") else b""
-    try:
-        text = original[len(bom):].decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError("Instruction file must be valid UTF-8 to preserve it safely.") from exc
-    newline = "\r\n" if "\r\n" in text else "\n"
-    lists = _parse_lists(text, kind, newline, client)
-    if lists is None or not lists.get(client):
+    bom, text, newline = _decode(original)
+    parsed = _parse_lists(text, kind, newline, client)
+    if parsed is None or not parsed[2].get(client):
         return original
-    start = text.index(BEGIN)
-    finish = text.index(END) + len(END)
-    rendered = _render_lists({**lists, client: []}, kind, newline, client)
-    if rendered is not None:
-        return bom + (text[:start] + rendered + text[finish:]).encode("utf-8")
-    # Installation appends a newline after the managed block. Remove that one
-    # as part of the block while retaining all surrounding user text.
-    if text.startswith("\r\n", finish):
-        finish += 2
-    elif text.startswith("\n", finish):
-        finish += 1
-    return bom + (text[:start] + text[finish:]).encode("utf-8")
+    rendered = _render_lists({**parsed[0], client: []}, kind, newline, client)
+    return bom + _replace_block(text, rendered, eat_newline=True).encode("utf-8")
+
+
+def _existing_instruction_files(root: Path, client: str):
+    # This validates the managed root and every instruction path for links.
+    _instruction_path(root, client)
+    for path in (root / name for name in _FILENAMES[client]):
+        if common.is_link_or_reparse(path):
+            raise ValueError(f"Refusing linked or reparse-point instruction file: {path}")
+        info = _stat_optional(path)
+        if info is None:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"Instruction path is not a regular file: {path}")
+        yield path
 
 
 def plan_instruction_removals(scope: str, repo_root: Path | None, client: str = "codex") -> list[InstructionUpdate]:
     """Plan removal of managed blocks from every recognized instruction file."""
     plans: list[InstructionUpdate] = []
     for kind, root in _instruction_roots(scope, repo_root, client):
-        # This validates the managed root and both instruction paths for links.
-        _instruction_path(root, client)
-        filenames = _FILENAMES[client]
-        for path in (root / name for name in filenames):
-            if common.is_link_or_reparse(path):
-                raise ValueError(f"Refusing linked or reparse-point instruction file: {path}")
-            info = _stat_optional(path)
-            if info is None:
-                continue
-            if not stat.S_ISREG(info.st_mode):
-                raise ValueError(f"Instruction path is not a regular file: {path}")
+        for path in _existing_instruction_files(root, client):
             original = path.read_bytes()
             proposed = _removed_bytes(original, kind, client)
             if proposed != original:
                 plans.append(InstructionUpdate(path, original, proposed, "Remove"))
+    return plans
+
+
+def plan_instruction_upgrades(scope: str, repo_root: Path | None, client: str = "codex",
+                              available: set[str] | None = None) -> list[InstructionUpdate]:
+    """Rewrite managed blocks left by earlier releases in the current format.
+
+    Legacy skill names are mapped to their replacements. When ``available`` is
+    given, this client's list keeps only skills that will be installed, so the
+    block never points at a missing file. Current blocks are left untouched.
+    """
+    plans: list[InstructionUpdate] = []
+    for kind, root in _instruction_roots(scope, repo_root, client):
+        for path in _existing_instruction_files(root, client):
+            original, bom, text, newline = _read_text(path)
+            parsed = _parse_lists(text, kind, newline, client)
+            if parsed is None or parsed[1]:
+                continue
+            lists = dict(parsed[0])
+            if available is not None:
+                lists[client] = [name for name in lists.get(client, []) if name in available]
+            rendered = _render_lists(lists, kind, newline, client)
+            proposed = bom + _replace_block(text, rendered, eat_newline=True).encode("utf-8")
+            plans.append(InstructionUpdate(path, original, proposed, "Upgrade" if rendered else "Remove"))
     return plans
 
 
@@ -497,32 +426,18 @@ def plan_selected_removals(scope: str, repo_root: Path | None, names: list[str],
     selected = set(common.validate_selection(names, common.SKILL_NAMES, "skill"))
     plans = []
     for kind, root in _instruction_roots(scope, repo_root, client):
-        _instruction_path(root, client)
-        for path in (root / name for name in _FILENAMES[client]):
-            info = _stat_optional(path)
-            if info is None:
+        for path in _existing_instruction_files(root, client):
+            original, bom, text, newline = _read_text(path)
+            parsed = _parse_lists(text, kind, newline, client)
+            if parsed is None:
                 continue
-            if common.is_link_or_reparse(path) or not stat.S_ISREG(info.st_mode):
-                raise ValueError(f"Invalid instruction file: {path}")
-            original = path.read_bytes()
-            bom = b"\xef\xbb\xbf" if original.startswith(b"\xef\xbb\xbf") else b""
-            try:
-                text = original[len(bom):].decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise ValueError("Instruction file must be valid UTF-8 to preserve it safely.") from exc
-            newline = "\r\n" if "\r\n" in text else "\n"
-            lists = _parse_lists(text, kind, newline, client)
-            existing = (lists or {}).get(client)
-            if not existing or not selected.intersection(existing):
+            lists, current, _raw = parsed
+            existing = lists.get(client, [])
+            if current and not selected.intersection(existing):
                 continue
             remaining = [name for name in existing if name not in selected]
             rendered = _render_lists({**lists, client: remaining}, kind, newline, client)
-            if rendered is not None:
-                start, end = text.index(BEGIN), text.index(END) + len(END)
-                proposed = bom + (text[:start] + rendered + text[end:]).encode("utf-8")
-            else:
-                proposed = _removed_bytes(original, kind, client)
-            plans.append(InstructionUpdate(path, original, proposed, "Remove selected"))
+            proposed = bom + _replace_block(text, rendered, eat_newline=True).encode("utf-8")
+            if proposed != original:
+                plans.append(InstructionUpdate(path, original, proposed, "Remove selected"))
     return plans
-
-

@@ -1,4 +1,4 @@
-"""Headless setup commands for roles, CodeGraph, and suggested integrations."""
+"""Headless setup commands for roles, the verify hook, and suggested skills."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import sys
 
 import common
 import agent_operations as agents
-import codegraph_installer as codegraph
+import hook_operations as hooks
 import suggested_installers as suggested
 
 
@@ -34,103 +34,64 @@ def _parser() -> argparse.ArgumentParser:
     roles.add_argument("--client", choices=common.CLIENTS, default="codex")
     roles.add_argument("--scope", choices=("global", "repo", "both"), default="global")
     roles.add_argument("--repo", help="existing target repository for repo or both scope")
-    roles.add_argument("--roles", nargs="+", choices=common.AGENT_NAMES, required=True)
+    roles.add_argument("--roles", nargs="+", choices=(*common.AGENT_NAMES, *common.RETIRED_AGENT_NAMES), required=True,
+                       help="reviewer; the retired designer, implementer, and tester roles are accepted only for remove")
     roles.add_argument("--model", action="append", default=[], metavar="ROLE=VALUE", help="set a model; ROLE= clears it")
     roles.add_argument("--effort", action="append", default=[], metavar="ROLE=VALUE", help="set reasoning effort; ROLE= clears it")
     roles.add_argument("--dry-run", action="store_true")
     roles.add_argument("--yes", action="store_true", help="confirm changes to global role configuration")
 
-    graph = commands.add_parser("codegraph", help="inspect or configure CodeGraph globally")
-    graph.add_argument("action", choices=("status", "setup"))
-    graph.add_argument("--client", choices=common.CLIENTS, default="codex")
-    graph.add_argument("--dry-run", action="store_true")
-    graph.add_argument("--yes", action="store_true", help="confirm network install and global client configuration")
+    hook = commands.add_parser("hooks", help="manage the optional stop hook that runs targeted checks when the agent finishes")
+    hook.add_argument("action", choices=("status", "install", "remove"))
+    hook.add_argument("--client", choices=common.CLIENTS, default="claude")
+    hook.add_argument("--dry-run", action="store_true")
+    hook.add_argument("--yes", action="store_true", help="confirm the change to user-wide client hook settings")
 
     integrations = commands.add_parser("suggested", help="manage suggested skills and tools")
     integrations.add_argument("action", choices=("status", "install", "remove"))
     integrations.add_argument("--client", choices=common.CLIENTS, default="codex")
-    integrations.add_argument("--items", nargs="+", choices=tuple(item.id for item in suggested.SUGGESTED_ITEMS))
+    integrations.add_argument("--items", nargs="+", choices=(*(item.id for item in suggested.SUGGESTED_ITEMS), *suggested.RETIRED_ITEMS),
+                              help="retired suggestions from earlier releases are accepted only by remove")
     integrations.add_argument("--dry-run", action="store_true")
     integrations.add_argument("--yes", action="store_true", help="confirm third-party install or suggested integration removal")
     return parser
 
 
 def _print_suggested_status(client: str) -> None:
-    if client == "copilot":
-        print("Suggested integrations are not supported for GitHub Copilot.")
-        return
     status = suggested.suggested_status(client)
-    by_id = {item.id: item for item in suggested.SUGGESTED_ITEMS}
-    for item_id, value in status.items():
-        name = by_id[item_id].name if item_id in by_id else "RTK command-output optimizer"
-        if isinstance(value, tuple):
-            text = ", ".join(map(str, value)) if value else "not detected"
-            print(f"{name}: {text}; version and provenance are unknown")
-        else:
-            print(f"{name}: {value or 'not detected on PATH'}; identity, version, and provenance are unknown")
+    for item in suggested.SUGGESTED_ITEMS:
+        value = status[item.id]
+        text = ", ".join(map(str, value)) + "; version and provenance unknown" if value else "not installed"
+        print(f"{item.name}: {text}")
+    for item_id, copies in suggested.retired_status(client).items():
+        print(f"Retired suggestion still installed: {suggested.RETIRED_ITEMS[item_id][0]} at {', '.join(map(str, copies))} "
+              f"(remove with: suggested remove --client {client} --items {item_id} --yes)")
 
 
-def _codegraph_dry_plan(client: str) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None, str]:
-    detected = codegraph.detected_command()
-    if detected:
-        plan = codegraph.plan_install(client)
-        return plan.executable, None, plan.details
-    if os.name == "nt" or codegraph.platform.system() == "Windows":
-        node, npm_cli = codegraph._windows_node_npm()
-        prefix_command = (str(node), str(npm_cli), "prefix", "-g")
-        install_command = (str(node), str(npm_cli), "install", "-g", codegraph.PINNED_PACKAGE)
-        config_executable = (str(node), "<npm-global-prefix>/node_modules/@colbymchenry/codegraph/<npm-shim.js|dist/bin/codegraph.js>")
-    else:
-        npm, node = shutil.which("npm"), shutil.which("node")
-        if not npm or not node:
-            raise RuntimeError("Node.js and npm are required to install CodeGraph.")
-        prefix_command = (str(Path(npm).resolve()), "prefix", "-g")
-        install_command = (str(Path(npm).resolve()), "install", "-g", codegraph.PINNED_PACKAGE)
-        config_executable = ("<npm-global-prefix>/bin/codegraph",)
-    details = (f"Selected package: {codegraph.PINNED_PACKAGE}; version and provenance of any existing installation are unknown. "
-               f"The global npm prefix and exact executable/configuration paths are unresolved until confirmed prefix lookup. "
-               f"Network: npm downloads the package and dependencies; package lifecycle code may execute. "
-               f"Global configuration target: {client} MCP settings and managed instructions. No project is initialized or indexed. "
-               f"Prefix lookup command (deferred until --yes): {' '.join(prefix_command)}")
-    return config_executable, install_command, details
-
-
-def _run_codegraph(args) -> int:
-    path = codegraph.detected_command()
-    print(f"Status: {codegraph.status_text(path)}")
-    print(f"Selected package for new installs: {codegraph.PINNED_PACKAGE}")
-    print(f"Detected executable: {path or '(none)'}; detected presence does not prove identity, version, or provenance")
-    print(f"Global configuration target: {args.client}: {codegraph.install_args(args.client)}")
-    print(f"Network/execution effects: a missing installation uses {codegraph.PINNED_PACKAGE}; npm downloads packages and dependencies and may run package lifecycle code. Existing commands are not upgraded.")
+def _run_hooks(args) -> int:
+    label = common.CLIENT_LABELS[args.client]
     if args.action == "status":
-        print("Project indexing: not performed; global setup is separate from project initialization and indexing. Use 'codegraph setup --dry-run' to inspect exact commands and resolved targets.")
+        print(f"{label} stop hook ({hooks.settings_path(args.client)}): {hooks.status(args.client)}")
         return 0
-    executable, npm_install, details = _codegraph_dry_plan(args.client)
-    print(details)
-    print("Planned commands:")
-    if npm_install:
-        print("  " + " ".join(npm_install))
-    if executable:
-        print("  " + " ".join((*executable, *codegraph.install_args(args.client))))
-    if args.dry_run:
+    plan = hooks.plan(args.action, args.client)
+    print(f"{plan.action}: {plan.path}")
+    if plan.command:
+        print(f"  Hook command: {plan.command}")
+        print(f"  Runs the targeted checks for changed files when the agent stops (timeout {hooks.TIMEOUT_SECONDS}s) "
+              "and sends failures back. Turn off per repository with an empty .getonmylevel-checks file.")
+    for note in plan.notes:
+        print(f"  Note: {note}")
+    if args.dry_run or plan.proposed == plan.original:
         return 0
     if not args.yes:
-        print("Refusing to install packages or change global client configuration without --yes.", file=sys.stderr)
+        print(f"Refusing to change user-wide {label} hook settings without --yes.", file=sys.stderr)
         return 2
-    try:
-        plan = codegraph.plan_install(args.client)
-        result = codegraph.install(plan)
-        print(result)
-        return 0
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"CodeGraph setup failed; package installation may have completed before failure: {exc}", file=sys.stderr)
-        return 1
+    hooks.apply(plan)
+    print(f"Completed: {plan.path}. Restart {label} to load the change.")
+    return 0
 
 
 def _run_suggested(args) -> int:
-    if args.client == "copilot":
-        print("Suggested integrations are not supported for GitHub Copilot; no action was taken.", file=sys.stderr)
-        return 2 if args.action != "status" else 0
     if args.action == "status":
         _print_suggested_status(args.client)
         return 0
@@ -165,7 +126,6 @@ def _run_suggested(args) -> int:
             print(f"Destination: {plan.destination or '(installer managed)'}")
             for command in plan.commands:
                 print("  Command: " + " ".join(command))
-            print("Network: pinned source fetch where listed; execution effects: " + plan.details)
         if args.dry_run:
             return 0
         if not args.yes:
@@ -208,8 +168,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Backup: {path}")
             print("No backups were created.")
             return 0
-        if args.area == "codegraph":
-            return _run_codegraph(args)
+        if args.area == "hooks":
+            return _run_hooks(args)
         return _run_suggested(args)
     except (OSError, ValueError, RuntimeError, UnicodeError) as exc:
         print(f"Operation stopped: {exc}", file=sys.stderr)
